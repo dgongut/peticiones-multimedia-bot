@@ -210,14 +210,19 @@ def button_controller(call):
             # Marcamos petición como completada
             peticionesPendientes = []
             peticionCompletada = []
+            name = ""
+
             for line in lines:
                 if not line.endswith(call.data):
                     peticionesPendientes.append(line)
                 else:
                     """Petición completada, avisamos al usuario"""
                     lineaSplit = line.split(sep='|')
-                    messageToUser = f'{lineaSplit[1]}, tu petición: {url_to_telegram_link(lineaSplit[2])}\n\n<b>Ha sido completada</b> ✅\n\nTardará unos minutos en aparecer, siempre podrás consultarlo en <i>{NOMBRE_CANAL_NOVEDADES}</i>\nGracias.'
-                    bot.send_message(int(lineaSplit[0]), str(messageToUser), parse_mode="html", disable_web_page_preview=True)
+                    userChatId = int(lineaSplit[0])
+                    name = lineaSplit[1]
+                    url = lineaSplit[2]
+                    messageToUser = f'{name}, tu petición: {url_to_telegram_link(url)}\n\n<b>Ha sido completada</b> ✅\n\nTardará unos minutos en aparecer, siempre podrás consultarlo en <i>{NOMBRE_CANAL_NOVEDADES}</i>\nGracias.'
+                    bot.send_message(userChatId, str(messageToUser), parse_mode="html", disable_web_page_preview=True)
                     peticionCompletada.append(line)
 
             # Escribir las líneas filtradas
@@ -229,11 +234,11 @@ def button_controller(call):
                 f.writelines(peticionCompletada)
 
             bot.delete_message(chatId, messageId)
-            bot.send_message(chatId, "La petición de " + str(peticionCompletada).split(sep='|')[1] + " ha sido marcada como completada ✅", parse_mode="html")
+            bot.send_message(chatId, f'La petición de {name} ha sido marcada como completada ✅', parse_mode="html")
         else:
             # Borramos la petición
             peticionesPendientes = []
-            nombre = ""
+            name = ""
 
             for line in lines:
                 if not line.endswith(call.data[2:]): # con el [2:] le estamos quitando el D|
@@ -241,16 +246,19 @@ def button_controller(call):
                 else:
                     """Petición eliminada, avisamos al usuario"""
                     lineaSplit = line.split(sep='|')
-                    messageToUser = f"{lineaSplit[1]}, tu petición: {url_to_telegram_link(lineaSplit[2])}\n\nHa sido finalmente <b>eliminada</b> por el administrador ❌"
-                    bot.send_message(int(lineaSplit[0]), str(messageToUser), parse_mode="html", disable_web_page_preview=True)
-                    nombre = lineaSplit[1]
+                    userChatId = int(lineaSplit[0])
+                    name = lineaSplit[1]
+                    url = lineaSplit[2]
+                    messageToUser = f"{name}, tu petición: {url_to_telegram_link(url)}\n\nHa sido finalmente <b>eliminada</b> por el administrador ❌"
+                    bot.send_message(userChatId, str(messageToUser), parse_mode="html", disable_web_page_preview=True)
+                    
 
             # Escribir las líneas filtradas
             with open(FICHERO_PETICIONES, 'w') as f:
                 f.writelines(peticionesPendientes)
 
             bot.delete_message(chatId, messageId)
-            bot.send_message(chatId, f'La petición de {nombre} ha sido eliminada con éxito ✅', parse_mode="html")
+            bot.send_message(chatId, f'La petición de {name} ha sido eliminada con éxito ✅', parse_mode="html")
 
     else: 
         """Gestiona las pulsaciones de los botones de paginación"""
