@@ -34,6 +34,8 @@ bot = telebot.TeleBot(TELEGRAM_TOKEN)
 
 # CONSTANTES NO CONFIGURABLES
 RESULTADOS_POR_FILA = 5
+DELETE_TIME = 5
+EDIT_TIME = 3
 
 # SE CREA DICCIONARIO DE BUSQUEDAS
 DIR = {"busquedas": "./busquedas/", "cache": "./cache/"}
@@ -66,7 +68,7 @@ def command_controller(message):
     chatId = message.chat.id
     comando = message.text.split()[0]
     
-    if "/start" == message.text:
+    if comando in ('/start'):
         texto_inicial = ""
         if not is_admin(chatId):
             """Da la bienvenida al usuario"""
@@ -87,7 +89,7 @@ def command_controller(message):
     elif comando in ('/busca'):
         if is_admin(chatId):
             x = bot.send_message(chatId, "Esta función está dedicada para los usuarios, <b>no para el administrador.</b>", parse_mode="html")
-            time.sleep(5)
+            time.sleep(DELETE_TIME)
             bot.delete_message(chatId, message.message_id)
             bot.delete_message(chatId, x.message_id)
         else:
@@ -116,8 +118,12 @@ def command_controller(message):
                     filmaffinityElements = web_scrapping_filmaffinity_search_page(res.text)
                     display_page(filmaffinityElements, chatId)
     
-    elif is_admin(chatId) and comando in ('/list'):
-        """Comando lista y es un admin"""
+    elif comando in ('/list'):
+        """Comando lista"""
+        if not is_admin(chatId):
+            user_introduces_admin_command(message)
+            return;
+
         bot.delete_message(chatId, message.message_id)
         
         if not peticiones_pendientes_empty(chatId):
@@ -136,8 +142,12 @@ def command_controller(message):
             markup.add(InlineKeyboardButton("❌", callback_data="cerrar"))
             bot.send_message(chatId, textoMensaje, reply_markup=markup, disable_web_page_preview=True, parse_mode="html")
 
-    elif is_admin(chatId) and comando in ('/borrar'):
-        """Comando borrar petición y es un admin"""
+    elif comando in ('/borrar'):
+        """Comando borrar petición"""
+        if not is_admin(chatId):
+            user_introduces_admin_command(message)
+            return;
+
         bot.delete_message(chatId, message.message_id)
         
         if not peticiones_pendientes_empty(chatId):
@@ -157,7 +167,7 @@ def command_controller(message):
             bot.send_message(chatId, textoMensaje, reply_markup=markup, disable_web_page_preview=True, parse_mode="html")
     
     elif not is_admin(chatId):
-        """NO es un admin y ha introducido un comando reservado para admin"""
+        """Un usuario normal ha introducido un comando"""
         text_controller(message)
 
 @bot.message_handler(content_types=["text"])
@@ -169,7 +179,7 @@ def text_controller(message):
     if message.text.startswith("/"):
         x = bot.send_message(chatId, "Comando no permitido, se reportará al administrador")
         bot.send_message(TELEGRAM_INTERNAL_CHAT, name + " ha enviado " + message.text)
-        time.sleep(5)
+        time.sleep(DELETE_TIME)
         bot.delete_message(chatId, message.message_id)
         bot.delete_message(chatId, x.message_id)
     
@@ -192,7 +202,7 @@ def text_controller(message):
         
     else:
         x = bot.send_message(chatId, "Este bot no es conversacional, el administrador <b>no recibirá</b> el mensaje si no va junto al enlace de Filmaffinity\n\nProcedo a borrar los mensajes", parse_mode="html")
-        time.sleep(5)
+        time.sleep(DELETE_TIME)
         bot.delete_message(chatId, message.message_id)
         bot.delete_message(chatId, x.message_id)
 
@@ -201,6 +211,12 @@ def button_controller(call):
     """Gestiona el completado de una petición al presionar su botón (borra la linea del fichero y la añade a completadas)"""
     chatId = call.from_user.id
     messageId = call.message.id
+
+    if call.data == "cerrar":
+        bot.delete_message(chatId, messageId)
+        delete_user_search(chatId, messageId)
+        return
+
     if is_admin(chatId): # El admin solamente marca como completadas las peticiones, no puede pedir
         # Leer y filtrar las líneas
         with open(FICHERO_PETICIONES, 'r') as f:
@@ -262,14 +278,6 @@ def button_controller(call):
 
     else: 
         """Gestiona las pulsaciones de los botones de paginación"""
-        chatId = call.from_user.id
-        messageId = call.message.id
-        
-        if call.data == "cerrar":
-            bot.delete_message(chatId, messageId)
-            delete_user_search(chatId, messageId)
-            return
-        
         datos = get_user_search(chatId, messageId)
         
         if call.data == "anterior":
@@ -349,8 +357,15 @@ def web_scrapping_filmaffinity_search_page(htmlText):
             # Encontrar el elemento 'ye-w' para el año de la película
             year_element = title_element.find_previous(class_='ye-w')
             year = year_element.get_text() if year_element else '-'
+
+            # Encontrar la nota media de la película
+            avg_rating_element = title_element.find_next(class_='avgrat-box')
+            avg_rating = avg_rating_element.get_text() if avg_rating_element else '--'
             
             title = f'{title.strip()} ({year})'
+
+            if avg_rating != '--':
+                title = f'{title} ({avg_rating}★)'
 
             write_cache_item(title, url)
             filmaffinityElements.append([title, url])
@@ -364,6 +379,9 @@ def url_to_telegram_link(url):
         res = requests.get(str(url.rstrip("\n")), headers=headers, timeout=10)
         soup = BeautifulSoup(res.text, 'html.parser')
         titulo = soup.title.text.rstrip(" - FilmAffinity")
+        avg_rating = soup.find(id="movie-rat-avg")
+        if avg_rating:
+           titulo = f'{titulo} ({avg_rating.get_text().strip()}★)'
         write_cache_item(titulo, url)
         return get_telegram_link(titulo, url)
 
@@ -401,7 +419,7 @@ def add_peticion_with_messages(chatId, messageId, name, url):
         add_peticion(chatId, name, url)
         x = bot.send_message(chatId, f'Has solicitado con éxito: {linkTelegram}\nNotificando al administrador ⌚', parse_mode="html", disable_web_page_preview=True)
         bot.send_message(TELEGRAM_INTERNAL_CHAT, f'Nueva petición de {name}: {linkTelegram}', parse_mode="html", disable_web_page_preview=True)
-        time.sleep(3)
+        time.sleep(EDIT_TIME)
         bot.edit_message_text(f'Has solicitado con éxito: {linkTelegram}\nNotificado al administrador ✅', chatId, x.message_id, parse_mode="html", disable_web_page_preview=True)
     except:
         bot.send_message(chatId, f'{name}, la petición: {url_to_telegram_link(url)} ya se encontraba añadida.', parse_mode="html", disable_web_page_preview=True)
@@ -431,11 +449,18 @@ def is_peticion_deletable(peticion):
 def is_admin(chatId):
     return chatId == TELEGRAM_ADMIN
 
+def user_introduces_admin_command(message):
+    chatId = message.chat.id
+    bot.delete_message(chatId, message.message_id)
+    x = bot.send_message(chatId, f'El comando {message.text} está reservado al administrador', parse_mode="html", disable_web_page_preview=True)
+    time.sleep(DELETE_TIME)
+    bot.delete_message(chatId, x.message_id)
+
 def peticiones_pendientes_empty(chatId):
     # Comprueba si hay peticiones pendientes. Si no las hay muestra un mensaje
     if os.path.getsize(FICHERO_PETICIONES) == 0:
         x = bot.send_message(chatId, "<b>No</b> hay peticiones disponibles ✅", parse_mode="html")
-        time.sleep(5)
+        time.sleep(DELETE_TIME)
         bot.delete_message(chatId, x.message_id)
         return True
     return False
