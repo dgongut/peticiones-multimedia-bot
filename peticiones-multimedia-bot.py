@@ -116,7 +116,11 @@ def command_controller(message):
                 else:
                     # Búsqueda correcta, analizamos los resultados
                     filmaffinityElements = web_scrapping_filmaffinity_search_page(res.text)
-                    display_page(filmaffinityElements, chatId)
+                    if not filmaffinityElements:
+                        # Cuando solo hay un resultado, no vamos a la pantalla de búsqueda sino a la página en sí de la película o serie, por lo que trataremos de obtener su información
+                        bot.send_message(chatId, "❌ Lamentablemente, <b>no se han encontrado</b> resultados para el texto introducido\nRecuerda que <b>no debes</b> introducir el año en el texto de búsqueda", parse_mode="html")
+                    else:
+                        display_page(filmaffinityElements, chatId)
     
     elif comando in ('/list'):
         """Comando lista"""
@@ -347,28 +351,47 @@ def web_scrapping_filmaffinity_search_page(htmlText):
     # Crear una lista para almacenar los títulos y URLs de las películas
     filmaffinityElements = []
 
+    # Comprobamos si no hay resultados
+    noResults = soup.find('b', string=re.compile(r"No hay resultados?"))
+
     # Extraer títulos y URLs de las películas y agregar a la lista
-    for title_element in filmaffinityRawElements:
-        link = title_element.find('a')
-        if link:
-            title = link['title']
-            url = link['href']
+    if noResults:
+        return filmaffinityElements
+    elif filmaffinityRawElements: # Hemos ido a la pantalla de búsqueda porque hay más de un resultado
+        for title_element in filmaffinityRawElements:
+            link = title_element.find('a')
+            if link:
+                title = link['title']
+                url = link['href']
 
-            # Encontrar el elemento 'ye-w' para el año de la película
-            year_element = title_element.find_previous(class_='ye-w')
-            year = year_element.get_text() if year_element else '-'
+                # Encontrar el elemento 'ye-w' para el año de la película
+                year_element = title_element.find_previous(class_='ye-w')
+                year = year_element.get_text() if year_element else '-'
 
-            # Encontrar la nota media de la película
-            avg_rating_element = title_element.find_next(class_='avgrat-box')
-            avg_rating = avg_rating_element.get_text() if avg_rating_element else '--'
-            
-            title = f'{title.strip()} ({year})'
+                # Encontrar la nota media de la película
+                avg_rating_element = title_element.find_next(class_='avgrat-box')
+                avg_rating = avg_rating_element.get_text() if avg_rating_element else '--'
+                
+                title = f'{title.strip()} ({year})'
 
-            if avg_rating != '--':
-                title = f'{title} ({avg_rating}★)'
+                if avg_rating != '--':
+                    title = f'{title} ({avg_rating}★)'
 
-            write_cache_item(title, url)
-            filmaffinityElements.append([title, url])
+                write_cache_item(title, url)
+                filmaffinityElements.append([title, url])
+    else: # No hemos ido a la pantalla de búsqueda sino a la página de la película/serie en sí
+        title = soup.title.text.rstrip(" - FilmAffinity")
+        avg_rating = soup.find(id="movie-rat-avg")
+        allLinks = soup.find_all('a')
+        url = None
+        for link in allLinks:
+            if 'Ficha' in link.get_text():
+                url = link['href']
+                break
+        if avg_rating:
+           title = f'{title} ({avg_rating.get_text().strip()}★)'
+        write_cache_item(title, url)
+        filmaffinityElements.append([title, url])
     return filmaffinityElements
 
 def url_to_telegram_link(url):
@@ -378,13 +401,13 @@ def url_to_telegram_link(url):
         headers = {"user-agent": USER_AGENT}
         res = requests.get(str(url.rstrip("\n")), headers=headers, timeout=10)
         soup = BeautifulSoup(res.text, 'html.parser')
-        titulo = soup.title.text.rstrip(" - FilmAffinity")
+        title = soup.title.text.rstrip(" - FilmAffinity")
         avg_rating = soup.find(id="movie-rat-avg")
         if avg_rating:
-           titulo = f'{titulo} ({avg_rating.get_text().strip()}★)'
-        write_cache_item(titulo, url)
-        return get_telegram_link(titulo, url)
-
+           title = f'{title} ({avg_rating.get_text().strip()}★)'
+        write_cache_item(title, url)
+        return get_telegram_link(title, url)
+        
 def url_to_film_code(url):
     # Utiliza una expresión regular para encontrar el número entre "film" y ".html"
     numeroPelicula = re.search(r'film(\d+)\.html', url)
@@ -394,11 +417,11 @@ def url_to_film_code(url):
     else:
         raise ValueError(f'No se encontró un número de película en el enlace: {url}')
 
-def get_telegram_link(titulo, url):
-    return f'<a href="{url}">{titulo}</a>'
+def get_telegram_link(title, url):
+    return f'<a href="{url}">{title}</a>'
 
-def write_cache_item(titulo, url):
-    pickle.dump(get_telegram_link(str(titulo).rstrip('\n'), str(url).rstrip('\n')), open(f'{DIR["cache"]}{url_to_film_code(url)}', 'wb'))
+def write_cache_item(title, url):
+    pickle.dump(get_telegram_link(str(title).rstrip('\n'), str(url).rstrip('\n')), open(f'{DIR["cache"]}{url_to_film_code(url)}', 'wb'))
 
 def read_cache_item(filmCode):
     return pickle.load(open(f'{DIR["cache"]}{filmCode}', 'rb'))
