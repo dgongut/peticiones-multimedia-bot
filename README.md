@@ -1,5 +1,13 @@
 # peticiones-multimedia-bot
 
+Lleva el control de las peticiones multimedia de tu servidor desde un único lugar.
+Deja que tus familiares y amigos añadan peticiones de la forma más cómoda:
+ - ¿Buscador integrado? ✅
+ - ¿Enlaces directos? ✅
+ - Filmaffinity e IMDb de manera simultánea ✅
+
+¿Lo buscas en [docker](https://hub.docker.com/r/dgongut/peticiones-multimedia-bot)?
+
 ### Funciones
 
 Como usuario:

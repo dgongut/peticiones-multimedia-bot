@@ -211,11 +211,8 @@ def text_controller(message):
             bot.send_message(chatId, "El administrador no puede realizar peticiones")
             return;
 
-        # Patrón de expresión regular para encontrar enlaces
-        pattern = r"https?://[^\s]+"
-
         # Buscar el primer enlace en el texto
-        enlace = re.search(pattern, message.text)
+        enlace = obtain_link_from_string(message.text)
 
         if enlace:
             enlaceEncontrado = enlace.group()
@@ -416,6 +413,7 @@ def web_scrapping_filmaffinity_search_page(htmlText):
                 break
         if avg_rating:
            title = f'{title} ({avg_rating.get_text().strip()}★)'
+        title = title.replace("  ", " ")
         write_cache_item(title, url)
         filmaffinityElements.append([title, url])
     return filmaffinityElements
@@ -462,6 +460,7 @@ def url_to_telegram_link(url):
             avg_rating = soup.find(id="movie-rat-avg")
             if avg_rating:
                title = f'{title} ({avg_rating.get_text().strip()}★)'
+            title = title.replace("  ", " ")
             write_cache_item(title, url)
             return get_telegram_link(title, url)
         else:
@@ -527,9 +526,13 @@ def check_if_exist_peticion(url):
     with open(FICHERO_PETICIONES, 'r') as f:
         lines = f.readlines()
         for line in lines:
-            if line.strip().endswith(url.strip()):
+            if url_to_film_code(url) == url_to_film_code(obtain_link_from_string(line).group()):
                 return True
     return False
+
+def obtain_link_from_string(text):
+    pattern = r"https?://[^\s]+"
+    return re.search(pattern, text)
 
 def is_peticion_deletable(peticion):
     # Las peticiones que están marcadas para borrar comienzan con D|
