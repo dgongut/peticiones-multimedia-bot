@@ -67,7 +67,7 @@ if not os.path.exists(FICHERO_PETICIONES_COMPLETADAS):
         pass
 
 # Respondemos al comando /start
-@bot.message_handler(commands=["start", "list", "busca", "borrar"])
+@bot.message_handler(commands=["start", "list", "busca"])
 def command_controller(message):
     chatId = message.chat.id
     comando = message.text.split()[0]
@@ -84,8 +84,7 @@ def command_controller(message):
             """Da la bienvenida al Administrador"""
             texto_inicial = f'Bienvenido al bot de peticiones <b>{SERVER_NAME}</b>\n\n'
             texto_inicial += 'A continuación puedes gestionar las peticiones de <a href="https://www.filmaffinity.com/es/main.html">Filmaffinity</a> y <a href="https://www.imdb.com">IMDb</a>\n\n'
-            texto_inicial += 'Con el comando:\n<code>/list</code>\nPodrás marcar para <b>completar</b> las peticiones pendientes\n\n'
-            texto_inicial += 'Con el comando:\n<code>/borrar</code>\nPodrás marcar para <b>borrar</b> las peticiones pendientes\n\n'
+            texto_inicial += 'Con el comando:\n<code>/list</code>\nPodrás marcar para <b>completar</b> o <b>borrar</b> las peticiones pendientes\n\n'
             texto_inicial += 'Cada una de estas acciones avisará al usuario'
         bot.delete_message(chatId, message.message_id)
         bot.send_message(chatId, texto_inicial, parse_mode="html", disable_web_page_preview=True)
@@ -150,8 +149,8 @@ def command_controller(message):
         bot.delete_message(chatId, message.message_id)
         
         if not peticiones_pendientes_empty(chatId):
-            markup = InlineKeyboardMarkup(row_width = RESULTADOS_POR_FILA)
-            textoMensaje = "Selecciona una petición para marcar como <b>completado</b>:\n"
+            markup = InlineKeyboardMarkup(row_width = 3)
+            textoMensaje = "<b>Completa</b> o <b>descarta</b> peticiones:\n"
             contador = 1
             botones = []
 
@@ -159,34 +158,12 @@ def command_controller(message):
                 for linea in archivo:
                     lineaSplit = linea.split(sep='|')
                     textoMensaje += f'<b>[{str(contador)}]</b> {lineaSplit[1]} : {url_to_telegram_link(lineaSplit[2])} \n'
-                    botones.append(InlineKeyboardButton(str(contador), callback_data=lineaSplit[2]))
+                    botones.append(InlineKeyboardButton(f'{str(contador)}: {extract_filmname_from_telegram_link(url_to_telegram_link(lineaSplit[2]))}', url=lineaSplit[2]))
+                    botones.append(InlineKeyboardButton("✅", callback_data=lineaSplit[2]))
+                    botones.append(InlineKeyboardButton("🗑️", callback_data=f'D|{lineaSplit[2]}'))
                     contador += 1
             markup.add(*botones)
-            markup.add(InlineKeyboardButton("❌", callback_data="cerrar"))
-            bot.send_message(chatId, textoMensaje, reply_markup=markup, disable_web_page_preview=True, parse_mode="html")
-
-    elif comando in ('/borrar'):
-        """Comando borrar petición"""
-        if not is_admin(chatId):
-            user_introduces_admin_command(message)
-            return;
-
-        bot.delete_message(chatId, message.message_id)
-        
-        if not peticiones_pendientes_empty(chatId):
-            markup = InlineKeyboardMarkup(row_width = RESULTADOS_POR_FILA)
-            textoMensaje = "Selecciona una petición para <b>borrarla</b>:\n"
-            contador = 1
-            botones = []
-
-            with open(FICHERO_PETICIONES) as archivo:
-                for linea in archivo:
-                    lineaSplit = linea.split(sep='|')
-                    textoMensaje += f'<b>[{str(contador)}]</b> {lineaSplit[1]} : {url_to_telegram_link(lineaSplit[2])} \n'
-                    botones.append(InlineKeyboardButton(str(contador), callback_data=f'D|{lineaSplit[2]}'))
-                    contador += 1
-            markup.add(*botones)
-            markup.add(InlineKeyboardButton("❌", callback_data="cerrar"))
+            markup.add(InlineKeyboardButton("❌ - Cerrar", callback_data="cerrar"))
             bot.send_message(chatId, textoMensaje, reply_markup=markup, disable_web_page_preview=True, parse_mode="html")
     
     elif not is_admin(chatId):
@@ -196,9 +173,9 @@ def command_controller(message):
 @bot.message_handler(content_types=["text"])
 def text_controller(message):
     """Gestiona los mensajes de texto"""
-    name = message.from_user.first_name
     chatId = message.chat.id
-    
+    name = f'<a href="tg://user?id={chatId}">{message.from_user.first_name}</a>'
+
     if message.text.startswith("/"):
         x = bot.send_message(chatId, "Comando no permitido, se reportará al administrador")
         bot.send_message(TELEGRAM_INTERNAL_CHAT, name + " ha enviado " + message.text)
@@ -223,7 +200,7 @@ def text_controller(message):
                 print(f'ERROR al buscar: {res.status_code} {res.reason}')
                 bot.send_message(chatId, f'Enlace no válido. {name} asegúrate de que el enlace que has enviado es correcto y lleva a una película o serie.')
                 return 1;
-            add_peticion_with_messages(chatId, message.message_id, message.from_user.first_name, enlaceEncontrado)
+            add_peticion_with_messages(chatId, message.message_id, name, enlaceEncontrado)
         else:
             bot.send_message(chatId, "Enlace no válido. No se permite el uso de acortadores de enlaces")
         
@@ -238,6 +215,7 @@ def button_controller(call):
     """Gestiona el completado de una petición al presionar su botón (borra la linea del fichero y la añade a completadas)"""
     chatId = call.from_user.id
     messageId = call.message.id
+    name = f'<a href="tg://user?id={chatId}">{call.from_user.first_name}</a>'
 
     if call.data == "cerrar":
         bot.delete_message(chatId, messageId)
@@ -329,7 +307,7 @@ def button_controller(call):
         
         else:
             # Ha pulsado en un resultado para hacer la petición
-            add_peticion_with_messages(chatId, messageId, call.from_user.first_name, call.data)
+            add_peticion_with_messages(chatId, messageId, name, call.data)
             delete_user_search(chatId, messageId)
 
 def display_page(lista, chatId, pag=0, messageId=None):
@@ -563,13 +541,19 @@ def peticiones_pendientes_empty(chatId):
         return True
     return False
 
+def extract_filmname_from_telegram_link(telegram_link):
+    result = re.search(r'>(.*?)</a>', telegram_link)
+    if result:
+        return result.group(1)
+    else:
+        return None
+
 # MAIN
 if __name__ == '__main__':
     print(f'Iniciando Bot de peticiones en {SERVER_NAME}')
     bot.set_my_commands([ # Comandos a mostrar en el menú de Telegram
         telebot.types.BotCommand("/start", "Da la bienvenida"),
         telebot.types.BotCommand("/busca", f'Busca en {SEARCH_ENGINE}'),
-        telebot.types.BotCommand("/list",  "<ADMIN> Utilidad para completar peticiones"),
-        telebot.types.BotCommand("/borrar","<ADMIN> Utilidad para descartar peticiones")
+        telebot.types.BotCommand("/list",  "<ADMIN> Utilidad para completar o descartar peticiones")
         ])
     bot.infinity_polling() # Arranca la detección de nuevos comandos 
