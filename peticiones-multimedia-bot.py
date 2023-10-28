@@ -5,7 +5,7 @@ from telebot.types import InlineKeyboardMarkup
 from telebot.types import InlineKeyboardButton
 import time # para los sleep
 import requests
-from bs4 import BeautifulSoup
+import json
 import pickle
 import re
 import sys
@@ -23,14 +23,30 @@ if 999 == TELEGRAM_INTERNAL_CHAT:
     TELEGRAM_INTERNAL_CHAT = TELEGRAM_ADMIN
 
 if "abc" == SERVER_NAME:
-    print("Se necesita cambiar el nombre del servidor con la variable SERVER_NAME")
+    msg = "Se necesita cambiar el nombre del servidor con la variable SERVER_NAME"
+    print(msg)
+    debug(msg)
     sys.exit(1)
 
 if "abc" == NOMBRE_CANAL_NOVEDADES:
     NOMBRE_CANAL_NOVEDADES = f'Novedades en {SERVER_NAME}'
 
 if "imdb" != SEARCH_ENGINE and "filmaffinity" != SEARCH_ENGINE:
-    print("El valor SEARCH_ENGINE de buscador ha de definirse, los valores son imdb o filmaffinity")
+    msg = "El valor SEARCH_ENGINE de buscador ha de definirse, los valores son imdb o filmaffinity"
+    print(msg)
+    debug(msg)
+    sys.exit(1)
+
+if "HOST:PORT" != HOST_FILMAFFINITY_API:
+    msg = "El valor HOST_FILMAFFINITY_API de buscador ha de definirse, la API puede consultarse en https://hub.docker.com/r/dgongut/filmaffinity-api"
+    print(msg)
+    debug(msg)
+    sys.exit(1)
+
+if "HOST:PORT" != HOST_IMDB_API:
+    msg = "El valor HOST_IMDB_API de buscador ha de definirse, la API puede consultarse en https://hub.docker.com/r/dgongut/imdb-api"
+    print(msg)
+    debug(msg)
     sys.exit(1)
 
 # Instanciamos el bot
@@ -86,7 +102,6 @@ def command_controller(message):
             texto_inicial += 'A continuación puedes gestionar las peticiones de <a href="https://www.filmaffinity.com/es/main.html">Filmaffinity</a> y <a href="https://www.imdb.com">IMDb</a>\n\n'
             texto_inicial += 'Con el comando:\n<code>/list</code>\nPodrás marcar para <b>completar</b> o <b>borrar</b> las peticiones pendientes\n\n'
             texto_inicial += 'Cada una de estas acciones avisará al usuario'
-        bot.delete_message(chatId, message.message_id)
         bot.send_message(chatId, texto_inicial, parse_mode="html", disable_web_page_preview=True)
        
     elif comando in ('/busca'):
@@ -108,34 +123,10 @@ def command_controller(message):
             
             else:
                 if is_search_engine_filmaffinity():
-                    url = f'{URL_BUSQUEDA_FILMAFFINITY}{textoBuscar.replace(" ", "%20")}'
-                    headers = {"user-agent": USER_AGENT}
-                    res = requests.get(url, headers=headers, timeout=10)
-                    
-                    if res.status_code != 200:
-                        print(f'ERROR al buscar: {res.status_code} {res.reason}')
-                        bot.send_message(chatId, "Se ha producido un error en la búsqueda\nInténtalo más tarde")
-                        return 1;
-                    
-                    else:
-                        # Búsqueda correcta, analizamos los resultados
-                        elements = web_scrapping_filmaffinity_search_page(res.text)
+                    elements = filmaffinity_search(textoBuscar)
                 else:
-                    url = f'{URL_BUSQUEDA_IMDB_BASE}{textoBuscar.replace(" ", "%20")}{URL_BUSQUEDA_IMDB_FINAL}'
-                    headers = {"user-agent": USER_AGENT}
-                    res = requests.get(url, headers=headers, timeout=10)
-                    
-                    if res.status_code != 200:
-                        print(f'ERROR al buscar: {res.status_code} {res.reason}')
-                        bot.send_message(chatId, "Se ha producido un error en la búsqueda\nInténtalo más tarde")
-                        return 1;
-                    
-                    else:
-                        # Búsqueda correcta, analizamos los resultados
-                        elements = web_scrapping_imdb_search_page(res.text)
-
+                    elements = imdb_search(textoBuscar)
                 if not elements:
-                    # Cuando solo hay un resultado, no vamos a la pantalla de búsqueda sino a la página en sí de la película o serie, por lo que trataremos de obtener su información
                     bot.send_message(chatId, "❌ Lamentablemente, <b>no se han encontrado</b> resultados para el texto introducido\nRecuerda que <b>no debes</b> introducir el año en el texto de búsqueda", parse_mode="html")
                 else:
                     display_page(elements, chatId)
@@ -172,7 +163,7 @@ def command_controller(message):
 
 @bot.message_handler(content_types=["text"])
 def text_controller(message):
-    """Gestiona los mensajes de texto"""
+    """Gestiona los mensajes de texto, por aqui entrara el texto que deberan ser exclusivamente peticiones mediante un enlace directo"""
     chatId = message.chat.id
     name = f'<a href="tg://user?id={chatId}">{message.from_user.first_name}</a>'
 
@@ -185,7 +176,10 @@ def text_controller(message):
     
     elif "filmaffinity.com" in message.text or "imdb.com" in message.text:
         if is_admin(chatId):
-            bot.send_message(chatId, "El administrador no puede realizar peticiones")
+            x = bot.send_message(chatId, "El administrador no puede realizar peticiones")
+            time.sleep(DELETE_TIME)
+            bot.delete_message(chatId, message.message_id)
+            bot.delete_message(chatId, x.message_id)
             return;
 
         # Buscar el primer enlace en el texto
@@ -193,26 +187,20 @@ def text_controller(message):
 
         if enlace:
             enlaceEncontrado = enlace.group()
-            # Chequeamos que devuelva un código de error correcto al menos
-            headers = {"user-agent": USER_AGENT}
-            res = requests.get(enlaceEncontrado, headers=headers, timeout=10)
-            if res.status_code != 200:
-                print(f'ERROR al buscar: {res.status_code} {res.reason}')
-                bot.send_message(chatId, f'Enlace no válido. {name} asegúrate de que el enlace que has enviado es correcto y lleva a una película o serie.')
-                return 1;
             add_peticion_with_messages(chatId, message.message_id, name, enlaceEncontrado)
         else:
-            bot.send_message(chatId, "Enlace no válido. No se permite el uso de acortadores de enlaces")
+            bot.send_message(chatId, "Enlace no válido.")
+            bot.send_message(TELEGRAM_INTERNAL_CHAT, name + " ha enviado " + message.text)
         
     else:
-        x = bot.send_message(chatId, "Este bot no es conversacional, el administrador <b>no recibirá</b> el mensaje si no va junto al enlace de Filmaffinity\n\nProcedo a borrar los mensajes", parse_mode="html")
+        x = bot.send_message(chatId, "Este bot no es conversacional, el administrador <b>no recibirá</b> el mensaje si no va junto al enlace de Filmaffinity o IMDb\n\nProcedo a borrar los mensajes", parse_mode="html")
         time.sleep(DELETE_TIME)
         bot.delete_message(chatId, message.message_id)
         bot.delete_message(chatId, x.message_id)
 
 @bot.callback_query_handler(func=lambda mensaje: True)
 def button_controller(call):
-    """Gestiona el completado de una petición al presionar su botón (borra la linea del fichero y la añade a completadas)"""
+    """Se ha pulsado un boton"""
     chatId = call.from_user.id
     messageId = call.message.id
     name = f'<a href="tg://user?id={chatId}">{call.from_user.first_name}</a>'
@@ -232,6 +220,7 @@ def button_controller(call):
             peticionesPendientes = []
             peticionCompletada = []
             name = ""
+            previsualizeImage = ""
 
             for line in lines:
                 if not line.endswith(call.data):
@@ -242,8 +231,9 @@ def button_controller(call):
                     userChatId = int(lineaSplit[0])
                     name = lineaSplit[1]
                     url = lineaSplit[2]
-                    messageToUser = f'{name}, tu petición: {url_to_telegram_link(url)}\n\n<b>Ha sido completada</b> ✅\n\nTardará unos minutos en aparecer, siempre podrás consultarlo en <i>{NOMBRE_CANAL_NOVEDADES}</i>\nGracias.'
-                    bot.send_message(userChatId, str(messageToUser), parse_mode="html", disable_web_page_preview=True)
+                    previsualizeImage = f'<a href="{read_cache_item_image(url)}"> </a>'
+                    messageToUser = f'{previsualizeImage}{name}, tu petición: {url_to_telegram_link(url)}\n\n<b>Ha sido completada</b> ✅\n\nTardará unos minutos en aparecer, siempre podrás consultarlo en <i>{NOMBRE_CANAL_NOVEDADES}</i>\nGracias.'
+                    bot.send_message(userChatId, str(messageToUser), parse_mode="html")
                     peticionCompletada.append(line)
 
             # Escribir las líneas filtradas
@@ -255,11 +245,12 @@ def button_controller(call):
                 f.writelines(peticionCompletada)
 
             bot.delete_message(chatId, messageId)
-            bot.send_message(chatId, f'La petición de {name} ha sido marcada como completada ✅', parse_mode="html")
+            bot.send_message(chatId, f'{previsualizeImage}La petición de {name} ha sido marcada como <b>completada</b> ✅', parse_mode="html")
         else:
             # Borramos la petición
             peticionesPendientes = []
             name = ""
+            previsualizeImage = ""
 
             for line in lines:
                 if not line.endswith(call.data[2:]): # con el [2:] le estamos quitando el D|
@@ -270,16 +261,16 @@ def button_controller(call):
                     userChatId = int(lineaSplit[0])
                     name = lineaSplit[1]
                     url = lineaSplit[2]
-                    messageToUser = f"{name}, tu petición: {url_to_telegram_link(url)}\n\nHa sido finalmente <b>eliminada</b> por el administrador ❌"
-                    bot.send_message(userChatId, str(messageToUser), parse_mode="html", disable_web_page_preview=True)
-                    
+                    previsualizeImage = f'<a href="{read_cache_item_image(url)}"> </a>'
+                    messageToUser = f"{previsualizeImage}{name}, tu petición: {url_to_telegram_link(url)}\n\nHa sido finalmente <b>eliminada</b> por el administrador ❌"
+                    bot.send_message(userChatId, str(messageToUser), parse_mode="html")
 
             # Escribir las líneas filtradas
             with open(FICHERO_PETICIONES, 'w') as f:
                 f.writelines(peticionesPendientes)
 
             bot.delete_message(chatId, messageId)
-            bot.send_message(chatId, f'La petición de {name} ha sido eliminada con éxito ✅', parse_mode="html")
+            bot.send_message(chatId, f'{previsualizeImage}La petición de {name} ha sido <b>eliminada</b> ✅', parse_mode="html")
 
     else: 
         """Gestiona las pulsaciones de los botones de paginación"""
@@ -344,116 +335,89 @@ def display_page(lista, chatId, pag=0, messageId=None):
         datos = {"pag":0, "lista":lista}
         set_user_search(chatId, messageId, datos)
 
-def web_scrapping_filmaffinity_search_page(htmlText):
-    soup = BeautifulSoup(htmlText, "html.parser")
-    # Encontrar todas las etiquetas con clase 'mc-title'
-    filmaffinityRawElements = soup.find_all(class_='mc-title')
+def filmaffinity_search(searchText):
+    urlSearch = f'{URL_BASE_API_FILMAFFINITY}/search?query={searchText.replace(" ", "%20")}'
 
     # Crear una lista para almacenar los títulos y URLs de las películas
     filmaffinityElements = []
 
-    # Comprobamos si no hay resultados
-    noResults = soup.find('b', string=re.compile(r"No hay resultados?"))
+    # Realizar una solicitud GET a la API
+    response = requests.get(urlSearch)
 
-    # Extraer títulos y URLs de las películas y agregar a la lista
-    if noResults:
+    # Verificar si la solicitud fue exitosa (código de respuesta 200)
+    if response.status_code == 200:
+        data = response.json()
+
+        for item in data:
+            title = f"{item['title']} ({item['year']})"
+            if item['rating'] != "--":
+                title = f"{title} ({item['rating']}★)"
+            url = item['url']
+            write_cache_item(title, url, item["id"])
+            write_cache_item_image(item['image'], item["id"])
+            filmaffinityElements.append([title, url])
+
+    elif response.status_code == 404:
         return filmaffinityElements
-    elif filmaffinityRawElements: # Hemos ido a la pantalla de búsqueda porque hay más de un resultado
-        for title_element in filmaffinityRawElements:
-            link = title_element.find('a')
-            if link:
-                title = link['title']
-                url = link['href']
-
-                # Encontrar el elemento 'ye-w' para el año de la película
-                year_element = title_element.find_previous(class_='ye-w')
-                year = year_element.get_text() if year_element else '-'
-
-                # Encontrar la nota media de la película
-                avg_rating_element = title_element.find_next(class_='avgrat-box')
-                avg_rating = avg_rating_element.get_text() if avg_rating_element else '--'
-                
-                title = f'{title.strip()} ({year})'
-
-                if avg_rating != '--':
-                    title = f'{title} ({avg_rating}★)'
-
-                write_cache_item(title, url)
-                filmaffinityElements.append([title, url])
-    else: # No hemos ido a la pantalla de búsqueda sino a la página de la película/serie en sí
-        title = soup.title.text.rstrip(" - FilmAffinity")
-        avg_rating = soup.find(id="movie-rat-avg")
-        allLinks = soup.find_all('a')
-        url = None
-        for link in allLinks:
-            if 'Ficha' in link.get_text():
-                url = link['href']
-                break
-        if avg_rating:
-           title = f'{title} ({avg_rating.get_text().strip()}★)'
-        title = title.replace("  ", " ")
-        write_cache_item(title, url)
-        filmaffinityElements.append([title, url])
+    else:
+        # La solicitud no fue exitosa
+        debug(f"Error al realizar la solicitud [{searchText}] a la API Filmaffinity. Código de respuesta:", response.status_code)
+    
     return filmaffinityElements
 
-def web_scrapping_imdb_search_page(htmlText):
-    soup = BeautifulSoup(htmlText, "html.parser")
+def imdb_search(searchText):
+    urlSearch = f'{URL_BASE_API_IMDB}/search?query={searchText.replace(" ", "%20")}'
 
     # Crear una lista para almacenar los títulos y URLs de las películas
     imdbElements = []
 
-    imdbRawElements = soup.find_all('li', class_='ipc-metadata-list-summary-item')
+    # Realizar una solicitud GET a la API
+    response = requests.get(urlSearch)
 
-    for title_element in imdbRawElements:
-        # Extraer el nombre y el año
-        title = title_element.find('a', class_='ipc-metadata-list-summary-item__t')
-        if title:
-            title = title.text
-        else:
-            continue
-        year = title_element.find('span', class_='ipc-metadata-list-summary-item__li')
-        if year:
-            year = f' ({year.text.replace("– ", "")})' # Si es una serie que no ha terminado saldría por ejemplo (2020- )
-        else:
-            year = ""
+    # Verificar si la solicitud fue exitosa (código de respuesta 200)
+    if response.status_code == 200:
+        data = response.json()
 
-        # Obtener la URL
-        url_incomplete = title_element.find('a', class_='ipc-metadata-list-summary-item__t')['href']
-        url = f"https://www.imdb.com{url_incomplete}"
+        for item in data:
+            url = item['url']
+            title = f'{item["title"]} ({item["year"]})'
+            write_cache_item(title, url, item["id"])
+            imdbElements.append([title, url])
 
-        title = f'{title}{year}'
-        write_cache_item(title, url)
-        imdbElements.append([title, url])
+    elif response.status_code == 404:
+        return imdbElements
+    else:
+        # La solicitud no fue exitosa
+        debug(f"Error al realizar la solicitud [{searchText}] a la API IMDb. Código de respuesta:", response.status_code)
+    
     return imdbElements
 
 def url_to_telegram_link(url):
     try:
         return read_cache_item(url_to_film_code(url))
     except:
-        headers = {"user-agent": USER_AGENT}
-        res = requests.get(str(url.rstrip("\n")), headers=headers, timeout=10)
-        soup = BeautifulSoup(res.text, 'html.parser')
+        specificUrl = None
         if is_filmaffinity_link(url):
-            title = soup.title.text.rstrip(" - FilmAffinity")
-            avg_rating = soup.find(id="movie-rat-avg")
-            if avg_rating:
-               title = f'{title} ({avg_rating.get_text().strip()}★)'
-            title = title.replace("  ", " ")
-            write_cache_item(title, url)
-            return get_telegram_link(title, url)
+            specificUrl = f'{URL_BASE_API_FILMAFFINITY}/film?url="{url}"'
         else:
-            # Obtener el nombre de la película
-            title = soup.title.text.rstrip(" - IMDb")
-            write_cache_item(title, url)
-            return get_telegram_link(title, url)
-        
+            specificUrl = f'{URL_BASE_API_IMDB}/film?url="{url}"'
+        specificData = requests.get(specificUrl).json()
+        title = f"{specificData['title']} ({specificData['year']})"
+        if specificData['rating'] != "--":
+            title = f"{title} ({specificData['rating']}★)"
+        write_cache_item(title, url, specificData['id'])
+        write_cache_item_image(specificData['image'], specificData['id'])
+        return get_telegram_link(title, url)
+
 def url_to_film_code(url):
-    numeroPelicula = ""
+    numeroPelicula = None
     if is_filmaffinity_link(url):
         numeroPelicula = re.search(r'film(\d+)\.html', url)
     else:
+        url = url.replace("\n", "")
+        if not url.endswith("/"):
+            url = f'{url}/'
         numeroPelicula = re.search(r'/tt(\d+)/', url)
-
     if numeroPelicula:
         numeroPelicula = numeroPelicula.group(1)
         return numeroPelicula
@@ -463,11 +427,30 @@ def url_to_film_code(url):
 def get_telegram_link(title, url):
     return f'<a href="{url}">{title}</a>'
 
-def write_cache_item(title, url):
-    pickle.dump(get_telegram_link(str(title).rstrip('\n'), str(url).rstrip('\n')), open(f'{DIR["cache"]}{url_to_film_code(url)}', 'wb'))
+def write_cache_item(title, url, filmCode):
+    pickle.dump(get_telegram_link(str(title).rstrip('\n'), str(url).rstrip('\n')), open(f'{DIR["cache"]}{filmCode}', 'wb'))
 
 def read_cache_item(filmCode):
     return pickle.load(open(f'{DIR["cache"]}{filmCode}', 'rb'))
+
+def write_cache_item_image(urlImage, filmCode):
+    pickle.dump(urlImage.replace("mmed", "large"), open(f'{DIR["cache"]}{filmCode}_img', 'wb'))
+
+def read_cache_item_image(url):
+    try:
+        return pickle.load(open(f'{DIR["cache"]}{url_to_film_code(url)}_img', 'rb'))
+    except:
+        return generate_image_cache(url)
+
+def generate_image_cache(url):
+    specificUrl = None
+    if is_filmaffinity_link(url):
+        specificUrl = f'{URL_BASE_API_FILMAFFINITY}/film?url="{url}"'
+    else:
+        specificUrl = f'{URL_BASE_API_IMDB}/film?url="{url}"'
+    specificData = requests.get(specificUrl).json()
+    write_cache_item_image(specificData['image'], url_to_film_code(url))
+    return specificData['image']
 
 def set_user_search(chatId, messageId, datos):
     pickle.dump(datos, open(f'{DIR["busquedas"]}{chatId}_{messageId}', 'wb'))
@@ -481,14 +464,14 @@ def delete_user_search(chatId, messageId):
 def add_peticion_with_messages(chatId, messageId, name, url):
     linkTelegram = url_to_telegram_link(url)
     bot.delete_message(chatId, messageId) # borramos el mensaje de la petición
+    previsualizeImage = f'<a href="{read_cache_item_image(url)}"> </a>'
     try:
         add_peticion(chatId, name, url)
-        x = bot.send_message(chatId, f'Has solicitado con éxito: {linkTelegram}\nNotificando al administrador ⌚', parse_mode="html", disable_web_page_preview=True)
-        bot.send_message(TELEGRAM_INTERNAL_CHAT, f'Nueva petición de {name}: {linkTelegram}', parse_mode="html", disable_web_page_preview=True)
+        bot.send_message(chatId, f'{previsualizeImage}{name}, has solicitado con éxito:\n{linkTelegram}\nNotificado al administrador ✅', parse_mode="html")
+        bot.send_message(TELEGRAM_INTERNAL_CHAT, f'{previsualizeImage}Nueva petición de {name}:\n{linkTelegram}', parse_mode="html")
         time.sleep(EDIT_TIME)
-        bot.edit_message_text(f'Has solicitado con éxito: {linkTelegram}\nNotificado al administrador ✅', chatId, x.message_id, parse_mode="html", disable_web_page_preview=True)
     except:
-        bot.send_message(chatId, f'{name}, la petición: {url_to_telegram_link(url)} ya se encontraba añadida.', parse_mode="html", disable_web_page_preview=True)
+        bot.send_message(chatId, f'{previsualizeImage}{name}, la petición: {url_to_telegram_link(url)} ya se encuentra añadida y está en estado pendiente.', parse_mode="html")
 
 def add_peticion(chatId, name, url):
     if check_if_exist_peticion(url):

@@ -24,6 +24,8 @@ Como administrador:
 |TELEGRAM_ADMIN |✅| ChatId del administrador (se puede obtener hablándole al bot Rose escribiendo /id) | 
 |TELEGRAM_INTERNAL_CHAT |❌| ChatId de un grupo o canal, en el caso de que se quiera notificar de nuevas peticiones en un chat diferente al del administrador |
 |SERVER_NAME |✅| Nombre del servidor |
+|HOST_FILMAFFINITY_API |✅| *(>v2.0)* Host y puerto de la [API de consulta a Filmaffinity](https://github.com/dgongut/filmaffinity-api) |
+|HOST_IMDB_API |✅| *(>v2.0)* Host y puerto de la [API de consulta a IMDB](https://github.com/dgongut/imdb-api) |
 |SEARCH_ENGINE |❌| filmaffinity ó imdb (por defecto filmaffinity) |
 |NOMBRE_CANAL_NOVEDADES |❌| Nombre del canal donde se publiquen las novedades, de no ponerse será "Novedades en "SERVER_NAME"" |
 |RESULTADOS_POR_PAGINA |❌| Indica cuántos resultados mostrar por página en el buscador integrado de Filmaffinity (10 por defecto) |
