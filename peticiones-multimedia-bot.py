@@ -25,7 +25,6 @@ if 999 == TELEGRAM_INTERNAL_CHAT:
 if "abc" == SERVER_NAME:
     msg = "Se necesita cambiar el nombre del servidor con la variable SERVER_NAME"
     print(msg)
-    debug(msg)
     sys.exit(1)
 
 if "abc" == NOMBRE_CANAL_NOVEDADES:
@@ -34,19 +33,16 @@ if "abc" == NOMBRE_CANAL_NOVEDADES:
 if "imdb" != SEARCH_ENGINE and "filmaffinity" != SEARCH_ENGINE:
     msg = "El valor SEARCH_ENGINE de buscador ha de definirse, los valores son imdb o filmaffinity"
     print(msg)
-    debug(msg)
     sys.exit(1)
 
-if "HOST:PORT" != HOST_FILMAFFINITY_API:
+if "HOST:PORT" == HOST_FILMAFFINITY_API:
     msg = "El valor HOST_FILMAFFINITY_API de buscador ha de definirse, la API puede consultarse en https://hub.docker.com/r/dgongut/filmaffinity-api"
     print(msg)
-    debug(msg)
     sys.exit(1)
 
-if "HOST:PORT" != HOST_IMDB_API:
+if "HOST:PORT" == HOST_IMDB_API:
     msg = "El valor HOST_IMDB_API de buscador ha de definirse, la API puede consultarse en https://hub.docker.com/r/dgongut/imdb-api"
     print(msg)
-    debug(msg)
     sys.exit(1)
 
 # Instanciamos el bot
