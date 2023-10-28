@@ -115,7 +115,7 @@ def command_controller(message):
                 texto += f'<code>{message.text} Gladiator</code>\n\n'
                 texto += '<b>Importante</b>: No incluyas el año en la búsqueda'
                 bot.send_message(chatId, texto, parse_mode="html")
-                return 1;
+                return 1
             
             else:
                 if is_search_engine_filmaffinity():
