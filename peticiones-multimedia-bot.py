@@ -165,7 +165,7 @@ def text_controller(message):
 
     if message.text.startswith("/"):
         x = bot.send_message(chatId, "Comando no permitido, se reportará al administrador")
-        bot.send_message(TELEGRAM_INTERNAL_CHAT, name + " ha enviado " + message.text)
+        bot.send_message(TELEGRAM_INTERNAL_CHAT, f'{name} ha enviado {message.text}', parse_mode="html")
         time.sleep(DELETE_TIME)
         bot.delete_message(chatId, message.message_id)
         bot.delete_message(chatId, x.message_id)
@@ -186,7 +186,7 @@ def text_controller(message):
             add_peticion_with_messages(chatId, message.message_id, name, enlaceEncontrado)
         else:
             bot.send_message(chatId, "Enlace no válido.")
-            bot.send_message(TELEGRAM_INTERNAL_CHAT, name + " ha enviado " + message.text)
+            bot.send_message(TELEGRAM_INTERNAL_CHAT, f'{name} ha enviado {message.text}', parse_mode="html")
         
     else:
         x = bot.send_message(chatId, "Este bot no es conversacional, el administrador <b>no recibirá</b> el mensaje si no va junto al enlace de Filmaffinity o IMDb\n\nProcedo a borrar los mensajes", parse_mode="html")
