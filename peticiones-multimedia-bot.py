@@ -1,12 +1,12 @@
 import os
 from config import *
-import telebot # para la api de telegram
+import telebot
+import mysql.connector
 from telebot.types import InlineKeyboardMarkup
 from telebot.types import InlineKeyboardButton
-import time # para los sleep
+import time
 import requests
 import json
-import pickle
 import re
 import sys
 
@@ -45,45 +45,69 @@ if "HOST:PORT" == HOST_IMDB_API:
     print(msg)
     sys.exit(1)
 
+if "HOST:PORT" == DATABASE_HOST:
+    msg = "El valor DATABASE_HOST ha de definirse"
+    print(msg)
+    sys.exit(1)
+
+if "abc" == DATABASE_PASSWORD:
+    msg = "El valor DATABASE_PASSWORD ha de definirse"
+    print(msg)
+    sys.exit(1)
+
+if "abc" == DATABASE_NAME:
+    msg = "El valor DATABASE_NAME ha de definirse"
+    print(msg)
+    sys.exit(1)
+
+if "abc" == DATABASE_USER:
+    msg = "El valor DATABASE_USER ha de definirse"
+    print(msg)
+    sys.exit(1)
+
 # Instanciamos el bot
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 
 # CONSTANTES NO CONFIGURABLES
-RESULTADOS_POR_FILA = 5
-DELETE_TIME = 5
-EDIT_TIME = 3
+BASIC_CONFIG = {
+    'RESULTADOS_POR_FILA': 5,
+    'DELETE_TIME': 5,
+    'EDIT_TIME': 3,
+    'DEBUG_SQL': 0,
+}
+STATUS = {
+    'PENDIENTE': 0,
+    'COMPLETADA': 1,
+    'DENEGADA': 2,
+}
+WEBPAGE = {
+    'FILMAFFINITY': 0,
+    'IMDB': 1,
+}
 
-# SE CREA DICCIONARIO DE BUSQUEDAS
-DIR = {"busquedas": "./busquedas/", "cache": "./cache/"}
-for key in DIR:
-    try:
-        os.mkdir(DIR[key])
-    except:
-        pass
 
-# Se crea la carpeta de peticiones si no existe ya
-try:
-    os.mkdir(os.path.basename(os.path.dirname(FICHERO_PETICIONES)))
-except:
-    pass
+# =======================================================================
+# =======================================================================
+#   _____ ____  _   _ _______ _____   ____  _      _      ______ _____  
+#  / ____/ __ \| \ | |__   __|  __ \ / __ \| |    | |    |  ____|  __ \ 
+# | |   | |  | |  \| |  | |  | |__) | |  | | |    | |    | |__  | |__) |
+# | |   | |  | | . ` |  | |  |  _  /| |  | | |    | |    |  __| |  _  / 
+# | |___| |__| | |\  |  | |  | | \ \| |__| | |____| |____| |____| | \ \ 
+#  \_____\____/|_| \_|  |_|  |_|  \_\\____/|______|______|______|_|  \_\                                                                      
+#
+# =======================================================================
+# =======================================================================
 
-# Se crean los ficheros de peticiones si no existen ya
-if not os.path.exists(FICHERO_PETICIONES):
-    # Si no existe, crea el archivo vacío
-    with open(FICHERO_PETICIONES, 'w') as archivo:
-        pass
-
-if not os.path.exists(FICHERO_PETICIONES_COMPLETADAS):
-    # Si no existe, crea el archivo vacío
-    with open(FICHERO_PETICIONES_COMPLETADAS, 'w') as archivo:
-        pass
-
-# Respondemos al comando /start
-@bot.message_handler(commands=["start", "list", "busca"])
+# Respondemos a los comandos /XXXX
+@bot.message_handler(commands=["start", "list", "busca", "ban", "unban", "send", "sendtouser"])
 def command_controller(message):
     chatId = message.chat.id
     comando = message.text.split()[0]
-    
+    update_user(message)
+    if not is_user_allowed(chatId):
+        bot.send_message(chatId, "Lamentablemente, <b>has sido baneado del bot.</b>", parse_mode="html")
+        return
+
     if comando in ('/start'):
         texto_inicial = ""
         if not is_admin(chatId):
@@ -103,7 +127,7 @@ def command_controller(message):
     elif comando in ('/busca'):
         if is_admin(chatId):
             x = bot.send_message(chatId, "Esta función está dedicada para los usuarios, <b>no para el administrador.</b>", parse_mode="html")
-            time.sleep(DELETE_TIME)
+            time.sleep(BASIC_CONFIG['DELETE_TIME'])
             bot.delete_message(chatId, message.message_id)
             bot.delete_message(chatId, x.message_id)
         else:
@@ -115,44 +139,190 @@ def command_controller(message):
                 texto += f'<code>{message.text} Gladiator</code>\n\n'
                 texto += '<b>Importante</b>: No incluyas el año en la búsqueda'
                 bot.send_message(chatId, texto, parse_mode="html")
-                return 1
-            
+                return 1;
+
+            if is_search_engine_filmaffinity():
+                elements = filmaffinity_search(textoBuscar)
             else:
-                if is_search_engine_filmaffinity():
-                    elements = filmaffinity_search(textoBuscar)
-                else:
-                    elements = imdb_search(textoBuscar)
-                if not elements:
-                    bot.send_message(chatId, "❌ Lamentablemente, <b>no se han encontrado</b> resultados para el texto introducido\nRecuerda que <b>no debes</b> introducir el año en el texto de búsqueda", parse_mode="html")
-                else:
-                    display_page(elements, chatId)
+                elements = imdb_search(textoBuscar)
+            if not elements:
+                bot.send_message(chatId, "❌ Lamentablemente, <b>no se han encontrado</b> resultados para el texto introducido\nRecuerda que <b>no debes</b> introducir el año en el texto de búsqueda", parse_mode="html")
+            else:
+                display_page(elements, chatId)
     
     elif comando in ('/list'):
         """Comando lista"""
-        if not is_admin(chatId):
-            user_introduces_admin_command(message)
-            return;
-
         bot.delete_message(chatId, message.message_id)
-        
-        if not peticiones_pendientes_empty(chatId):
+        if is_admin(chatId):
             markup = InlineKeyboardMarkup(row_width = 3)
             textoMensaje = "<b>Completa</b> o <b>descarta</b> peticiones:\n"
             contador = 1
             botones = []
 
-            with open(FICHERO_PETICIONES) as archivo:
-                for linea in archivo:
-                    lineaSplit = linea.split(sep='|')
-                    textoMensaje += f'<b>[{str(contador)}]</b> {lineaSplit[1]} : {url_to_telegram_link(lineaSplit[2])} \n'
-                    botones.append(InlineKeyboardButton(f'{str(contador)}: {extract_filmname_from_telegram_link(url_to_telegram_link(lineaSplit[2]))}', url=lineaSplit[2]))
-                    botones.append(InlineKeyboardButton("✅", callback_data=lineaSplit[2]))
-                    botones.append(InlineKeyboardButton("🗑️", callback_data=f'D|{lineaSplit[2]}'))
-                    contador += 1
+            query = """
+                    SELECT p.film_code, p.webpage_id, u.name, u.chat_id
+                    FROM peticiones p
+                    JOIN usuarios u ON p.chat_id = u.chat_id
+                    WHERE p.status_id = %s;
+            """
+
+            # Ejecutar la consulta con el estado pendiente como parámetro
+            cursor = get_cursor(mydb)
+            executeQuery(cursor, query, (STATUS['PENDIENTE'],))
+
+            # Obtener todos los resultados
+            resultados = cursor.fetchall()
+            cursor.close()
+
+            if len(resultados) == 0:
+                x = bot.send_message(chatId, "<b>No</b> hay peticiones pendientes ✅", parse_mode="html")
+                time.sleep(BASIC_CONFIG['DELETE_TIME'])
+                bot.delete_message(chatId, x.message_id)
+                return
+
+            # Iterar sobre los resultados e imprimir la información
+            for resultado in resultados:
+                film_code, webpage, name, userId = resultado
+                url = film_code_to_url(film_code, webpage)
+                telegram_link = url_to_telegram_link(url)
+                name = telegram_name_with_link(userId, name)
+                textoMensaje += f'<b>[{str(contador)}]</b> {name} : {telegram_link} \n'
+                botones.append(InlineKeyboardButton(f'{str(contador)}: {extract_filmname_from_telegram_link(telegram_link)}', url=url))
+                botones.append(InlineKeyboardButton("✅", callback_data=url))
+                botones.append(InlineKeyboardButton("🗑️", callback_data=f'D|{url}'))
+                contador += 1
+
             markup.add(*botones)
             markup.add(InlineKeyboardButton("❌ - Cerrar", callback_data="cerrar"))
             bot.send_message(chatId, textoMensaje, reply_markup=markup, disable_web_page_preview=True, parse_mode="html")
-    
+        else:
+            markup = InlineKeyboardMarkup(row_width = 1)
+            textoMensaje = "<b>Descarta</b> tus peticiones:\n"
+            contador = 1
+            botones = []
+
+            query = """
+                    SELECT p.film_code, p.webpage_id, u.name, u.chat_id
+                    FROM peticiones p
+                    JOIN usuarios u ON p.chat_id = u.chat_id
+                    WHERE p.status_id = %s AND p.chat_id = %s;
+            """
+
+            # Ejecutar la consulta con el estado pendiente como parámetro
+            cursor = get_cursor(mydb)
+            executeQuery(cursor, query, (STATUS['PENDIENTE'], chatId))
+
+            # Obtener todos los resultados
+            resultados = cursor.fetchall()
+            cursor.close()
+
+            if len(resultados) == 0:
+                x = bot.send_message(chatId, "<b>No</b> tienes peticiones pendientes ✅", parse_mode="html")
+                time.sleep(BASIC_CONFIG['DELETE_TIME'])
+                bot.delete_message(chatId, x.message_id)
+                return
+
+            # Iterar sobre los resultados e imprimir la información
+            for resultado in resultados:
+                film_code, webpage, name, userId = resultado
+                url = film_code_to_url(film_code, webpage)
+                telegram_link = url_to_telegram_link(url)
+                name = telegram_name_with_link(userId, name)
+                botones.append(InlineKeyboardButton(f'🗑️ {str(contador)}: {extract_filmname_from_telegram_link(telegram_link)}', callback_data=f'D|{url}'))
+                contador += 1
+
+            markup.add(*botones)
+            markup.add(InlineKeyboardButton("❌ - Cerrar", callback_data="cerrar"))
+            bot.send_message(chatId, textoMensaje, reply_markup=markup, disable_web_page_preview=True, parse_mode="html")
+
+    elif comando in ('/ban', '/unban'):
+        """Comando lista"""
+        if not is_admin(chatId):
+            user_introduces_admin_command(message)
+            return;
+        userToBanOrUnBan = " ".join(message.text.split()[1:])
+        if not userToBanOrUnBan or not userToBanOrUnBan.startswith('@'): 
+            # El usuario sólamente ha introducido /ban
+            texto = 'Debes introducir el nombre de usuario con el @\n'
+            texto += 'Ejemplo:\n'
+            texto += f'<code>{message.text} @periquito</code>\n\n'
+            bot.send_message(chatId, texto, parse_mode="html")
+            return 1;
+
+        try:
+            if comando in ('/ban'):
+                ban_user(userToBanOrUnBan[1:])
+                bot.send_message(chatId, f"<b>El usuario {userToBanOrUnBan} ha sido baneado.</b>", parse_mode="html")
+            else:
+                unban_user(userToBanOrUnBan[1:])
+                bot.send_message(chatId, f"<b>El usuario {userToBanOrUnBan} ha sido desbaneado.</b>", parse_mode="html")
+        except:
+            bot.send_message(chatId, f"<b>No se ha podido banear al usuario {userToBanOrUnBan}.</b>\nNo existe ningún usuario con ese nombre de usuario asociado.", parse_mode="html")
+
+    elif comando in ('/send'):
+        if not is_admin(chatId):
+            user_introduces_admin_command(message)
+            return;
+
+        textoAEnviar = " ".join(message.text.split()[1:])
+        if not textoAEnviar: 
+            # El usuario sólamente ha introducido /send
+            texto = 'Debes introducir algo como mensaje\n'
+            texto += 'Ejemplo:\n'
+            texto += f'<code>{message.text} Hola a todos</code>\n\n'
+            texto += '<b>Importante</b>: Este mensaje lo recibirán todos aquellos que hayan usado el bot y que no estén baneados.'
+            bot.send_message(chatId, texto, parse_mode="html")
+            return 1;
+
+        users = get_all_active_users()
+        for user in users:
+            try:
+                if not is_admin(user[0]):
+                    bot.send_message(user[0], textoAEnviar, parse_mode="Markdown")
+            except:
+                debug(f"El usuario {user[0]} no existe actualmente o ha bloqueado al bot")
+        bot.send_message(chatId, f'Se ha difundido el mensaje: {textoAEnviar}', parse_mode="Markdown")
+
+    elif comando in ('/sendtouser'):
+        if not is_admin(chatId):
+            user_introduces_admin_command(message)
+            return;
+
+        patron = r'/sendtouser @(\S+) (.+)'
+        username = None
+        textoAEnviar = None
+
+        # Buscar coincidencias en el texto
+        coincidencia = re.match(patron, message.text)
+
+        if coincidencia:
+            # El grupo 1 contiene el nombre de usuario, el grupo 2 contiene el mensaje
+            username = coincidencia.group(1)
+            textoAEnviar = coincidencia.group(2)
+        else: 
+            # El usuario sólamente ha introducido /sendtouser o algo erroneo
+            texto = 'Debes introducir el usuario y el mensaje que deseas enviar\n'
+            texto += 'Ejemplo:\n'
+            texto += f'<code>{message.text} @periquito Hola a periquito</code>\n\n'
+            texto += '<b>Importante</b>: Este mensaje lo recibirá el destinatario.'
+            bot.send_message(chatId, texto, parse_mode="html")
+            return 1;
+
+        query = """
+            SELECT chat_id
+            FROM usuarios
+            WHERE username = %s;
+        """
+        cursor = get_cursor(mydb)
+        executeQuery(cursor, query, (username,))
+        result = cursor.fetchone()
+        cursor.close()
+        if not result:
+            debug(f"El usuario {username} no se encuentra registrado entre los usuarios.")
+            return
+        bot.send_message(result[0], textoAEnviar, parse_mode="Markdown")
+        bot.send_message(chatId, f'Se ha difundido el mensaje: {textoAEnviar}', parse_mode="Markdown")
+
     elif not is_admin(chatId):
         """Un usuario normal ha introducido un comando"""
         text_controller(message)
@@ -161,22 +331,25 @@ def command_controller(message):
 def text_controller(message):
     """Gestiona los mensajes de texto, por aqui entrara el texto que deberan ser exclusivamente peticiones mediante un enlace directo"""
     chatId = message.chat.id
-    name = f'<a href="tg://user?id={chatId}">{message.from_user.first_name}</a>'
-
+    name = telegram_name_with_link(chatId, message.from_user.first_name)
+    update_user(message)
+    if not is_user_allowed(chatId):
+        bot.send_message(chatId, "Lamentablemente, <b>has sido baneado del bot.</b>", parse_mode="html")
+        return
     if message.text.startswith("/"):
         x = bot.send_message(chatId, "Comando no permitido, se reportará al administrador")
         bot.send_message(TELEGRAM_INTERNAL_CHAT, f'{name} ha enviado {message.text}', parse_mode="html")
-        time.sleep(DELETE_TIME)
+        time.sleep(BASIC_CONFIG['DELETE_TIME'])
         bot.delete_message(chatId, message.message_id)
         bot.delete_message(chatId, x.message_id)
     
     elif "filmaffinity.com" in message.text or "imdb.com" in message.text:
         if is_admin(chatId):
             x = bot.send_message(chatId, "El administrador no puede realizar peticiones")
-            time.sleep(DELETE_TIME)
+            time.sleep(BASIC_CONFIG['DELETE_TIME'])
             bot.delete_message(chatId, message.message_id)
             bot.delete_message(chatId, x.message_id)
-            return;
+            return
 
         # Buscar el primer enlace en el texto
         enlace = obtain_link_from_string(message.text)
@@ -190,7 +363,7 @@ def text_controller(message):
         
     else:
         x = bot.send_message(chatId, "Este bot no es conversacional, el administrador <b>no recibirá</b> el mensaje si no va junto al enlace de Filmaffinity o IMDb\n\nProcedo a borrar los mensajes", parse_mode="html")
-        time.sleep(DELETE_TIME)
+        time.sleep(BASIC_CONFIG['DELETE_TIME'])
         bot.delete_message(chatId, message.message_id)
         bot.delete_message(chatId, x.message_id)
 
@@ -199,77 +372,61 @@ def button_controller(call):
     """Se ha pulsado un boton"""
     chatId = call.from_user.id
     messageId = call.message.id
-    name = f'<a href="tg://user?id={chatId}">{call.from_user.first_name}</a>'
+    name = telegram_name_with_link(chatId, call.from_user.first_name)
 
     if call.data == "cerrar":
         bot.delete_message(chatId, messageId)
         delete_user_search(chatId, messageId)
         return
 
-    if is_admin(chatId): # El admin solamente marca como completadas las peticiones, no puede pedir
-        # Leer y filtrar las líneas
-        with open(FICHERO_PETICIONES, 'r') as f:
-            lines = f.readlines()
-
-        if not is_peticion_deletable(call.data):
-            # Marcamos petición como completada
-            peticionesPendientes = []
-            peticionCompletada = []
-            name = ""
-            previsualizeImage = ""
-
-            for line in lines:
-                if not line.endswith(call.data):
-                    peticionesPendientes.append(line)
-                else:
-                    """Petición completada, avisamos al usuario"""
-                    lineaSplit = line.split(sep='|')
-                    userChatId = int(lineaSplit[0])
-                    name = lineaSplit[1]
-                    url = lineaSplit[2]
-                    previsualizeImage = f'<a href="{read_cache_item_image(url)}"> </a>'
-                    messageToUser = f'{previsualizeImage}{name}, tu petición: {url_to_telegram_link(url)}\n\n<b>Ha sido completada</b> ✅\n\nTardará unos minutos en aparecer, siempre podrás consultarlo en <i>{NOMBRE_CANAL_NOVEDADES}</i>\nGracias.'
-                    bot.send_message(userChatId, str(messageToUser), parse_mode="html")
-                    peticionCompletada.append(line)
-
-            # Escribir las líneas filtradas
-            with open(FICHERO_PETICIONES, 'w') as f:
-                f.writelines(peticionesPendientes)
-
-            # Agregar las líneas completadas al archivo de peticiones completadas
-            with open(FICHERO_PETICIONES_COMPLETADAS, 'a') as f:
-                f.writelines(peticionCompletada)
-
+    # Se ha pulsado en un boton de borrar una peticion
+    if is_peticion_deletable(call.data):
+        filmCode = url_to_film_code(call.data[2:])
+        result = get_data_from_peticion(filmCode)
+        firstName, userId = result
+        username = telegram_name_with_link(userId, firstName)
+        previsualizeImage = f'<a href="{read_cache_item_image(call.data[2:])}"> </a>'
+        if not is_admin(chatId) and not check_owner_peticion(chatId, filmCode): # El admin puede borrar cualquiera
             bot.delete_message(chatId, messageId)
-            bot.send_message(chatId, f'{previsualizeImage}La petición de {name} ha sido marcada como <b>completada</b> ✅', parse_mode="html")
+            bot.send_message(chatId, f'{previsualizeImage}{name}, no tienes permiso para eliminar esa petición ❌', parse_mode="html")
+            bot.send_message(TELEGRAM_INTERNAL_CHAT, f'El usuario {name} ha intenado eliminar la petición {filmCode} ❌', parse_mode="html")
+            return
+        # Borramos la petición
+        cursor = get_cursor(mydb)
+        executeQuery(cursor, 'UPDATE peticiones SET status_id = %s WHERE film_code = %s', (STATUS['DENEGADA'], filmCode))
+        mydb.commit()
+        cursor.close()
+        bot.delete_message(chatId, messageId)
+        bot.send_message(chatId, f'{previsualizeImage}La petición de {username} ha sido <b>eliminada</b> ✅', parse_mode="html")
+        if not is_admin(chatId):
+            bot.send_message(TELEGRAM_INTERNAL_CHAT, f'{previsualizeImage}El usuario {name} ha eliminado su petición ❌', parse_mode="html")
         else:
-            # Borramos la petición
-            peticionesPendientes = []
-            name = ""
-            previsualizeImage = ""
+            messageToUser = f"{previsualizeImage}{username}, tu petición: {url_to_telegram_link(call.data[2:])}\n\nHa sido finalmente <b>eliminada</b> por el administrador ❌"
+            bot.send_message(userId, messageToUser, parse_mode="html")
 
-            for line in lines:
-                if not line.endswith(call.data[2:]): # con el [2:] le estamos quitando el D|
-                    peticionesPendientes.append(line)
-                else:
-                    """Petición eliminada, avisamos al usuario"""
-                    lineaSplit = line.split(sep='|')
-                    userChatId = int(lineaSplit[0])
-                    name = lineaSplit[1]
-                    url = lineaSplit[2]
-                    previsualizeImage = f'<a href="{read_cache_item_image(url)}"> </a>'
-                    messageToUser = f"{previsualizeImage}{name}, tu petición: {url_to_telegram_link(url)}\n\nHa sido finalmente <b>eliminada</b> por el administrador ❌"
-                    bot.send_message(userChatId, str(messageToUser), parse_mode="html")
+    # Se ha pulsado un botón para completar una peticion
+    elif is_admin(chatId):
+        # Marcamos petición como completada (call.data es una URL)
+        filmCode = url_to_film_code(call.data)
+        result = get_data_from_peticion(filmCode)
+        firstName, userId = result
+        username = telegram_name_with_link(userId, firstName)
 
-            # Escribir las líneas filtradas
-            with open(FICHERO_PETICIONES, 'w') as f:
-                f.writelines(peticionesPendientes)
+        cursor = get_cursor(mydb)
+        executeQuery(cursor, 'UPDATE peticiones SET status_id = %s WHERE film_code = %s', (STATUS['COMPLETADA'], filmCode))
+        mydb.commit()
+        cursor.close()
 
-            bot.delete_message(chatId, messageId)
-            bot.send_message(chatId, f'{previsualizeImage}La petición de {name} ha sido <b>eliminada</b> ✅', parse_mode="html")
+        previsualizeImage = f'<a href="{read_cache_item_image(call.data)}"> </a>'
+        bot.delete_message(chatId, messageId)
+        bot.send_message(chatId, f'{previsualizeImage}La petición de {username} ha sido marcada como <b>completada</b> ✅', parse_mode="html")
+        messageToUser = f'{previsualizeImage}{username}, tu petición: {url_to_telegram_link(call.data)}\n\n<b>Ha sido completada</b> ✅\n\nTardará unos minutos en aparecer, siempre podrás consultarlo en <i>{NOMBRE_CANAL_NOVEDADES}</i>\nGracias.'
+        bot.send_message(userId, messageToUser, parse_mode="html")
 
+    # Dado que el administrador es el único que no puede usar el buscador, solo queda que sea un usuario con los botones de paginación
     else: 
         """Gestiona las pulsaciones de los botones de paginación"""
+        # (call.data es una URL)
         datos = get_user_search(chatId, messageId)
         
         if call.data == "anterior":
@@ -297,10 +454,22 @@ def button_controller(call):
             add_peticion_with_messages(chatId, messageId, name, call.data)
             delete_user_search(chatId, messageId)
 
+# ==============================================================
+# ==============================================================
+#  ______ _    _ _   _  _____ _______ _____ ____  _   _  _____ 
+# |  ____| |  | | \ | |/ ____|__   __|_   _/ __ \| \ | |/ ____|
+# | |__  | |  | |  \| | |       | |    | || |  | |  \| | (___  
+# |  __| | |  | | . ` | |       | |    | || |  | | . ` |\___ \ 
+# | |    | |__| | |\  | |____   | |   _| || |__| | |\  |____) |
+# |_|     \____/|_| \_|\_____|  |_|  |_____\____/|_| \_|_____/ 
+#
+# ==============================================================
+# ==============================================================
+
 def display_page(lista, chatId, pag=0, messageId=None):
     """Crea o edita un mensaje de la página"""
     #Creamos la botonera
-    markup = InlineKeyboardMarkup(row_width = RESULTADOS_POR_FILA)
+    markup = InlineKeyboardMarkup(row_width = BASIC_CONFIG['RESULTADOS_POR_FILA'])
     botonAnterior = InlineKeyboardButton("⬅", callback_data="anterior")
     botonCerrar = InlineKeyboardButton("❌", callback_data="cerrar")
     botonSiguiente = InlineKeyboardButton("➡", callback_data="siguiente")
@@ -405,6 +574,19 @@ def url_to_telegram_link(url):
         write_cache_item_image(specificData['image'], specificData['id'])
         return get_telegram_link(title, url)
 
+def get_data_from_peticion(filmCode):
+    query = """
+        SELECT u.name, u.chat_id
+        FROM peticiones p
+        JOIN usuarios u ON p.chat_id = u.chat_id
+        WHERE p.film_code = %s;
+    """
+    cursor = get_cursor(mydb)
+    executeQuery(cursor, query, (filmCode,))
+    result = cursor.fetchone()
+    cursor.close()
+    return result
+
 def url_to_film_code(url):
     numeroPelicula = None
     if is_filmaffinity_link(url):
@@ -420,22 +602,73 @@ def url_to_film_code(url):
     else:
         raise ValueError(f'No se encontró un número de película en el enlace: {url}')
 
+def film_code_to_url(filmCode, webpage):
+    if webpage == WEBPAGE['FILMAFFINITY']:
+        return f'https://www.filmaffinity.com/es/film{filmCode}.html'
+    else:
+        return f'https://www.imdb.com/title/tt{filmCode}/'
+
 def get_telegram_link(title, url):
     return f'<a href="{url}">{title}</a>'
 
+def telegram_name_with_link(chatId, name):
+    return f'<a href="tg://user?id={chatId}">{name}</a>'
+
+def get_all_active_users():
+    # Ejecutar la consulta con el estado pendiente como parámetro
+    cursor = get_cursor(mydb)
+    executeQuery(cursor, 'SELECT chat_id FROM usuarios WHERE allowed = 1')
+
+    # Obtener todos los resultados
+    resultados = cursor.fetchall()
+    cursor.close()
+    return resultados
+
+def check_owner_peticion(chatId, filmCode):
+    cursor = get_cursor(mydb)
+    executeQuery(cursor, 'SELECT COUNT(*) FROM peticiones WHERE chat_id = %s and film_code = %s', (chatId, filmCode))
+    result = cursor.fetchone()[0]
+    cursor.close()
+    return True if result != 0 else False
+
 def write_cache_item(title, url, filmCode):
-    pickle.dump(get_telegram_link(str(title).rstrip('\n'), str(url).rstrip('\n')), open(f'{DIR["cache"]}{filmCode}', 'wb'))
+    query = """
+        INSERT INTO cache (clave, valor)
+        VALUES (%s, %s)
+        ON DUPLICATE KEY UPDATE valor = %s
+    """
+    cursor = get_cursor(mydb)
+    executeQuery(cursor, query, (filmCode, get_telegram_link(str(title).rstrip('\n'), str(url).rstrip('\n')), get_telegram_link(str(title).rstrip('\n'), str(url).rstrip('\n'))))
+    mydb.commit()
+    cursor.close()
 
 def read_cache_item(filmCode):
-    return pickle.load(open(f'{DIR["cache"]}{filmCode}', 'rb'))
+    cursor = get_cursor(mydb)
+    executeQuery(cursor, 'SELECT valor FROM cache WHERE clave = %s', (filmCode,))
+    result = cursor.fetchone()[0]
+    cursor.close()
+    return result
 
 def write_cache_item_image(urlImage, filmCode):
-    pickle.dump(urlImage.replace("mmed", "large"), open(f'{DIR["cache"]}{filmCode}_img', 'wb'))
+    query = """
+        INSERT INTO cache (clave, valor)
+        VALUES (%s, %s)
+        ON DUPLICATE KEY UPDATE valor = %s
+    """
+    cursor = get_cursor(mydb)
+    executeQuery(cursor, query, (f'{filmCode}_img', urlImage, urlImage))
+    mydb.commit()
+    cursor.close()
 
 def read_cache_item_image(url):
+    cursor = get_cursor(mydb)
     try:
-        return pickle.load(open(f'{DIR["cache"]}{url_to_film_code(url)}_img', 'rb'))
+        executeQuery(cursor, 'SELECT valor FROM cache WHERE clave = %s', (f'{url_to_film_code(url)}_img',))
+        result = cursor.fetchone()[0]
+        cursor.close()
+        return result
     except:
+        cursor.close()
         return generate_image_cache(url)
 
 def generate_image_cache(url):
@@ -449,43 +682,97 @@ def generate_image_cache(url):
     return specificData['image']
 
 def set_user_search(chatId, messageId, datos):
-    pickle.dump(datos, open(f'{DIR["busquedas"]}{chatId}_{messageId}', 'wb'))
+    query = """
+        INSERT INTO cache (clave, valor)
+        VALUES (%s, %s)
+        ON DUPLICATE KEY UPDATE valor = %s
+    """
+    cursor = get_cursor(mydb)
+    executeQuery(cursor, query, (f'{chatId}_{messageId}', json.dumps(datos), json.dumps(datos)))
+    mydb.commit()
+    cursor.close()
 
 def get_user_search(chatId, messageId):
-    return pickle.load(open(f'{DIR["busquedas"]}{chatId}_{messageId}', 'rb'))
+    cursor = get_cursor(mydb)
+    executeQuery(cursor, 'SELECT valor FROM cache WHERE clave = %s', (f'{chatId}_{messageId}',))
+    result = json.loads(cursor.fetchone()[0])
+    cursor.close()
+    return result
 
 def delete_user_search(chatId, messageId):
-    os.remove(f'{DIR["busquedas"]}{chatId}_{messageId}')
+    cursor = get_cursor(mydb)
+    executeQuery(cursor, 'DELETE FROM cache WHERE clave = %s', (f'{chatId}_{messageId}',))
+    mydb.commit()
+    cursor.close()
 
 def add_peticion_with_messages(chatId, messageId, name, url):
     linkTelegram = url_to_telegram_link(url)
     bot.delete_message(chatId, messageId) # borramos el mensaje de la petición
     previsualizeImage = f'<a href="{read_cache_item_image(url)}"> </a>'
     try:
-        add_peticion(chatId, name, url)
+        add_peticion(chatId, url)
         bot.send_message(chatId, f'{previsualizeImage}{name}, has solicitado con éxito:\n{linkTelegram}\nNotificado al administrador ✅', parse_mode="html")
         bot.send_message(TELEGRAM_INTERNAL_CHAT, f'{previsualizeImage}Nueva petición de {name}:\n{linkTelegram}', parse_mode="html")
-        time.sleep(EDIT_TIME)
-    except:
-        bot.send_message(chatId, f'{previsualizeImage}{name}, la petición: {url_to_telegram_link(url)} ya se encuentra añadida y está en estado pendiente.', parse_mode="html")
+        time.sleep(BASIC_CONFIG['EDIT_TIME'])
+    except PeticionExiste as e:
+        bot.send_message(chatId, f'{previsualizeImage}{name}, la petición: {url_to_telegram_link(url)} ya se encuentra añadida y está en estado {e.status}.', parse_mode="html")
 
-def add_peticion(chatId, name, url):
-    if check_if_exist_peticion(url):
-        raise ValueError("Existe la peticion")
-    archivo = open(FICHERO_PETICIONES, "a+")
-    archivo.write(f"{chatId}|{name}|{url}\n")
-    archivo.close()
+def add_peticion(chatId, url):
+    update = False
+    try:
+        check_if_exist_peticion(url)
+    except PeticionExiste as e:
+        if e.code == STATUS['DENEGADA']:
+            update = True
+        else:
+            raise e
+    if not update:
+        cursor = get_cursor(mydb)
+        executeQuery(cursor, 'INSERT INTO peticiones (chat_id, film_code, webpage_id, status_id) VALUES (%s, %s, %s, %s)', (chatId, url_to_film_code(url), WEBPAGE['FILMAFFINITY'] if is_filmaffinity_link(url) else WEBPAGE['IMDB'], STATUS['PENDIENTE']))
+        mydb.commit()
+        cursor.close()
+    else:
+        cursor = get_cursor(mydb)
+        executeQuery(cursor, 'UPDATE peticiones SET status_id = %s WHERE film_code = %s', (STATUS['PENDIENTE'], url_to_film_code(url)))
+        mydb.commit()
+        cursor.close()
 
-def debug(message):
-    bot.send_message(TELEGRAM_INTERNAL_CHAT, message, disable_web_page_preview=True)
+def update_user(call):
+    chatId = call.from_user.id
+    name = call.from_user.first_name
+    username = call.from_user.username
+    query = """
+        INSERT INTO usuarios (chat_id, name, username)
+        VALUES (%s, %s, %s)
+        ON DUPLICATE KEY UPDATE name = %s, username = %s
+    """
+    cursor = get_cursor(mydb)
+    executeQuery(cursor, query, (chatId, name, username, name, username))
+    mydb.commit()
+    cursor.close()
 
-def check_if_exist_peticion(url): 
-    with open(FICHERO_PETICIONES, 'r') as f:
-        lines = f.readlines()
-        for line in lines:
-            if url_to_film_code(url) == url_to_film_code(obtain_link_from_string(line).group()):
-                return True
-    return False
+def debug(message, html=None):
+    print(message)
+    if html:
+        bot.send_message(TELEGRAM_INTERNAL_CHAT, message, disable_web_page_preview=True, parse_mode="html")
+    else:
+        bot.send_message(TELEGRAM_INTERNAL_CHAT, message, disable_web_page_preview=True)
+
+def check_if_exist_peticion(url):
+    cursor = get_cursor(mydb)
+    executeQuery(cursor, 
+                '''
+                SELECT s.id, s.description
+                FROM peticiones p
+                INNER JOIN status s ON p.status_id = s.id
+                WHERE p.film_code = %s
+                ''',
+                (url_to_film_code(url),)
+            )
+    result = cursor.fetchone()
+    cursor.close()
+    if result is not None:
+        raise PeticionExiste(result[0], result[1])
 
 def obtain_link_from_string(text):
     pattern = r"https?://[^\s]+"
@@ -508,17 +795,8 @@ def user_introduces_admin_command(message):
     chatId = message.chat.id
     bot.delete_message(chatId, message.message_id)
     x = bot.send_message(chatId, f'El comando {message.text} está reservado al administrador', parse_mode="html", disable_web_page_preview=True)
-    time.sleep(DELETE_TIME)
+    time.sleep(BASIC_CONFIG['DELETE_TIME'])
     bot.delete_message(chatId, x.message_id)
-
-def peticiones_pendientes_empty(chatId):
-    # Comprueba si hay peticiones pendientes. Si no las hay muestra un mensaje
-    if os.path.getsize(FICHERO_PETICIONES) == 0:
-        x = bot.send_message(chatId, "<b>No</b> hay peticiones disponibles ✅", parse_mode="html")
-        time.sleep(DELETE_TIME)
-        bot.delete_message(chatId, x.message_id)
-        return True
-    return False
 
 def extract_filmname_from_telegram_link(telegram_link):
     result = re.search(r'>(.*?)</a>', telegram_link)
@@ -527,12 +805,189 @@ def extract_filmname_from_telegram_link(telegram_link):
     else:
         return None
 
+def is_user_allowed(chatId):
+    cursor = get_cursor(mydb)
+    executeQuery(cursor, 'SELECT allowed FROM usuarios WHERE chat_id = %s', (chatId,))
+    result = cursor.fetchone()[0]
+    cursor.close()
+    return bool(result)
+
+def ban_user(username):
+    cursor = get_cursor(mydb)
+    executeQuery(cursor, 'UPDATE usuarios SET allowed = false WHERE username = %s', (username,))
+    mydb.commit()
+    cursor.close()
+
+def unban_user(username):
+    cursor = get_cursor(mydb)
+    executeQuery(cursor, 'UPDATE usuarios SET allowed = true WHERE username = %s', (username,))
+    mydb.commit()
+    cursor.close()
+
+class PeticionExiste(Exception):
+    def __init__(self, code, status):
+        super().__init__()
+        self.status = status
+        self.code = code
+
+# =================
+# =================
+#   _____  ____  
+#  |  __ \|  _ \ 
+#  | |  | | |_) |
+#  | |  | |  _ < 
+#  | |__| | |_) |
+#  |_____/|____/ 
+#
+# =================
+# =================
+
+def create_tables_default(mydb):
+    print("Creando tablas si no existen")
+
+    cursor = get_cursor(mydb)
+
+    # Verifica si las tablas ya existen
+    executeQuery(cursor, "SHOW TABLES LIKE 'usuarios'")
+    usuarios_exists = cursor.fetchone()
+    print(f'TABLE usuarios existe: {usuarios_exists}')
+
+    executeQuery(cursor, "SHOW TABLES LIKE 'peticiones'")
+    peticiones_exists = cursor.fetchone()
+    print(f'TABLE peticiones existe: {peticiones_exists}')
+
+    executeQuery(cursor, "SHOW TABLES LIKE 'cache'")
+    cache_exists = cursor.fetchone()
+    print(f'TABLE cache existe: {cache_exists}')
+
+    executeQuery(cursor, "SHOW TABLES LIKE 'status'")
+    status_exist = cursor.fetchone()
+    print(f'TABLE status existe: {status_exist}')
+
+    executeQuery(cursor, "SHOW TABLES LIKE 'webpage'")
+    webpage_exist = cursor.fetchone()
+    print(f'TABLE webpage existe: {webpage_exist}')
+    
+    # Si las tablas no existen, créalas
+    if not usuarios_exists:
+        # Crear tabla de usuarios
+        executeQuery(cursor, """
+            CREATE TABLE usuarios (
+                chat_id BIGINT PRIMARY KEY,
+                name VARCHAR(255) NOT NULL,
+                username VARCHAR(255),
+                allowed BOOLEAN DEFAULT TRUE
+            )
+        """)
+
+    if not status_exist:
+        # Crear tabla de status
+        executeQuery(cursor, """
+            CREATE TABLE status (
+                id INT PRIMARY KEY,
+                description VARCHAR(255) NOT NULL
+            )
+        """)
+        # Insertar valores por defecto solo si no existen
+        executeQuery(cursor, 'INSERT INTO status (id, description) SELECT 0, "pendiente" WHERE NOT EXISTS (SELECT 1 FROM status WHERE id = 0)')
+        executeQuery(cursor, 'INSERT INTO status (id, description) SELECT 1, "completada" WHERE NOT EXISTS (SELECT 1 FROM status WHERE id = 1)')
+        executeQuery(cursor, 'INSERT INTO status (id, description) SELECT 2, "denegada" WHERE NOT EXISTS (SELECT 1 FROM status WHERE id = 2)')
+
+    if not webpage_exist:
+        # Crear tabla de status
+        executeQuery(cursor, """
+            CREATE TABLE webpage (
+                id INT PRIMARY KEY,
+                description VARCHAR(50) NOT NULL
+            )
+        """)
+        # Insertar valores por defecto solo si no existen
+        executeQuery(cursor, 'INSERT INTO webpage (id, description) SELECT 0, "filmaffinity" WHERE NOT EXISTS (SELECT 1 FROM webpage WHERE id = 0)')
+        executeQuery(cursor, 'INSERT INTO webpage (id, description) SELECT 1, "imdb" WHERE NOT EXISTS (SELECT 1 FROM webpage WHERE id = 1)')
+
+    if not cache_exists:
+        # Crear tabla de cache
+        executeQuery(cursor, """
+            CREATE TABLE cache (
+                clave VARCHAR(255) PRIMARY KEY,
+                valor TEXT
+            )
+        """)
+
+    if not peticiones_exists:
+        # Crear tabla de peticiones
+        executeQuery(cursor, """
+            CREATE TABLE peticiones (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                chat_id BIGINT NOT NULL,
+                film_code VARCHAR(255) NOT NULL,
+                webpage_id INT NOT NULL,
+                status_id INT NOT NULL,
+                FOREIGN KEY (chat_id) REFERENCES usuarios(chat_id),
+                FOREIGN KEY (status_id) REFERENCES status(id),
+                FOREIGN KEY (webpage_id) REFERENCES webpage(id)
+            )
+        """)
+        
+    print("Tablas correctas")
+    mydb.commit()
+    # Cerrar la conexión
+    cursor.close()
+
+def conectar():
+    print("Conectando a BBDD")
+    HOST, PORT = DATABASE_HOST.split(":")
+    return mysql.connector.connect(
+        host=HOST,
+        port=PORT,
+        user=DATABASE_USER,
+        password=DATABASE_PASSWORD,
+        database=DATABASE_NAME
+    )
+
+def get_cursor(mydb):
+    if mydb is None or not mydb.is_connected():
+        print("Intentando reconectar...")
+        mydb = conectar()
+        print("Reconectado")
+    return mydb.cursor()
+
+def executeQuery(cursor, query, values=None):
+    if BASIC_CONFIG['DEBUG_SQL'] == 1:
+        if values is not None:
+            debug(f"SQL Query: {query % values}")
+        else:
+            debug(f"SQL Query: {query}")
+
+    if values is not None:
+        return cursor.execute(query, values)
+    else:
+        return cursor.execute(query)
+
+# ===============================
+# ===============================
+#   __  __          _____ _   _ 
+#  |  \/  |   /\   |_   _| \ | |
+#  | \  / |  /  \    | | |  \| |
+#  | |\/| | / /\ \   | | | . ` |
+#  | |  | |/ ____ \ _| |_| |\  |
+#  |_|  |_/_/    \_\_____|_| \_|
+#                              
+# ===============================
+# ===============================
+
 # MAIN
 if __name__ == '__main__':
     print(f'Iniciando Bot de peticiones en {SERVER_NAME}')
+    time.sleep(5) # Esperamos a la BBDD por si se está arrancando
+    mydb = conectar()
+    create_tables_default(mydb)
     bot.set_my_commands([ # Comandos a mostrar en el menú de Telegram
         telebot.types.BotCommand("/start", "Da la bienvenida"),
         telebot.types.BotCommand("/busca", f'Busca en {SEARCH_ENGINE}'),
-        telebot.types.BotCommand("/list",  "<ADMIN> Utilidad para completar o descartar peticiones")
+        telebot.types.BotCommand("/list",  "Utilidad para completar o descartar peticiones"),
+        telebot.types.BotCommand("/ban",  "<ADMIN> Utilidad para banear usuarios"),
+        telebot.types.BotCommand("/unban",  "<ADMIN> Utilidad para desbanear usuarios"),
+        telebot.types.BotCommand("/send",  "<ADMIN> Utilidad para escribir a todos los usuarios")
         ])
     bot.infinity_polling() # Arranca la detección de nuevos comandos 

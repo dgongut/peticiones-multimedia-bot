@@ -8,15 +8,18 @@ Deja que tus familiares y amigos añadan peticiones de la forma más cómoda:
 
 ¿Lo buscas en [docker](https://hub.docker.com/r/dgongut/peticiones-multimedia-bot)?
 
-### Funciones
+## Funciones
 
 Como usuario:
- - Tienes la posibilidad de añadir una petición de una película o serie. Tan sencillo como mandar un enlace de FilmAffinity/IMDb o usar el buscador integrado.
+ - Añade peticiones de una películas o series. Tan sencillo como mandar un enlace de FilmAffinity/IMDb o usar el buscador integrado.
+ - Tienes la posibilidad de gestionar tus peticiones para eliminarlas.
 
 Como administrador:
  - Puedes llevar un control de las peticiones pendientes, confirmarlas o descartarlas.
+ - Puedes banear y desbanear usuarios
+ - Puedes enviar mensajes a todos los usuarios o a un único usuario
 
-### Configuración en config.py
+## Configuración en config.py
                     
 | CLAVE  | OBLIGATORIO | VALOR |
 |:------------- |:---------------:| :-------------|
@@ -26,6 +29,13 @@ Como administrador:
 |SERVER_NAME |✅| Nombre del servidor |
 |HOST_FILMAFFINITY_API |✅| *(>v2.0)* Host y puerto de la [API de consulta a Filmaffinity](https://github.com/dgongut/filmaffinity-api) |
 |HOST_IMDB_API |✅| *(>v2.0)* Host y puerto de la [API de consulta a IMDB](https://github.com/dgongut/imdb-api) |
+|DATABASE_USER |✅| *(>v3.0)* Usuario de la BBDD MariaDB |
+|DATABASE_PASSWORD |✅| *(>v3.0)* Contraseña de la BBDD MariaDB |
+|DATABASE_NAME |✅| *(>v3.0)* Nombre de la BBDD MariaDB |
+|DATABASE_HOST |✅| *(>v3.0)* Host y puerto (IP:PUERTO) de la BBDD MariaDB |
 |SEARCH_ENGINE |❌| filmaffinity ó imdb (por defecto filmaffinity) |
 |NOMBRE_CANAL_NOVEDADES |❌| Nombre del canal donde se publiquen las novedades, de no ponerse será "Novedades en "SERVER_NAME"" |
 |RESULTADOS_POR_PAGINA |❌| Indica cuántos resultados mostrar por página en el buscador integrado de Filmaffinity (10 por defecto) |
+
+### Anotaciones
+Tras la versión 3.0 se ha cambiado la manera en la que se guardan las peticiones. Ya no se guardarán en dos ficheros txt, sino que se guardarán en una BBDD MariaDB. Para facilitar la migración, [he creado un script en python](https://github.com/dgongut/migracion-peticiones-bot-v3).
