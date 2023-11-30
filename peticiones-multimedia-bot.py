@@ -115,6 +115,7 @@ def command_controller(message):
             texto_inicial = f'Bienvenido al bot de peticiones <b>{SERVER_NAME}</b>\n\n'
             texto_inicial += f'A continuación puedes compartir enlaces de <a href="https://www.filmaffinity.com/es/main.html">Filmaffinity</a> ó <a href="https://www.imdb.com">IMDb</a> para que se añadan a {SERVER_NAME}\n\n'
             texto_inicial += f'También puedes buscar directamente en {SEARCH_ENGINE} escribiendo lo siguiente:\n<code>/busca Gladiator</code>\n'
+            texto_inicial += 'Con el comando:\n<code>/list</code>\nPodrás <b>borrar</b> tus peticiones pendientes\n\n'
             texto_inicial += 'Serás avisado cuando se inicie su descarga'
         else:
             """Da la bienvenida al Administrador"""
@@ -270,7 +271,7 @@ def command_controller(message):
             texto = 'Debes introducir algo como mensaje\n'
             texto += 'Ejemplo:\n'
             texto += f'<code>{message.text} Hola a todos</code>\n\n'
-            texto += '<b>Importante</b>: Este mensaje lo recibirán todos aquellos que hayan usado el bot y que no estén baneados.'
+            texto += '<b>Importante</b>: Este mensaje lo frecibirán todos aquellos que hayan usado el bot y que no estén baneados.'
             bot.send_message(chatId, texto, parse_mode="html")
             return 1;
 
@@ -959,10 +960,14 @@ def executeQuery(cursor, query, values=None):
         else:
             debug(f"SQL Query: {query}")
 
-    if values is not None:
-        return cursor.execute(query, values)
-    else:
-        return cursor.execute(query)
+    try:
+        if values is not None:
+            return cursor.execute(query, values)
+        else:
+            return cursor.execute(query)
+    except:
+        mydb = conectar()
+        executeQuery(get_cursor(mydb), query, values)
 
 # ===============================
 # ===============================
