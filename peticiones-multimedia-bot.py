@@ -73,7 +73,6 @@ BASIC_CONFIG = {
     'RESULTADOS_POR_FILA': 5,
     'DELETE_TIME': 5,
     'EDIT_TIME': 3,
-    'DEBUG_SQL': 0,
 }
 STATUS = {
     'PENDIENTE': 0,
@@ -167,13 +166,7 @@ def command_controller(message):
                     WHERE p.status_id = %s;
             """
 
-            # Ejecutar la consulta con el estado pendiente como parámetro
-            cursor = get_cursor(mydb)
-            executeQuery(cursor, query, (STATUS['PENDIENTE'],))
-
-            # Obtener todos los resultados
-            resultados = cursor.fetchall()
-            cursor.close()
+            resultados = executeQuery(query, (STATUS['PENDIENTE'],))
 
             if len(resultados) == 0:
                 x = bot.send_message(chatId, "<b>No</b> hay peticiones pendientes ✅", parse_mode="html")
@@ -198,7 +191,7 @@ def command_controller(message):
             bot.send_message(chatId, textoMensaje, reply_markup=markup, disable_web_page_preview=True, parse_mode="html")
         else:
             markup = InlineKeyboardMarkup(row_width = 1)
-            textoMensaje = "<b>Descarta</b> tus peticiones:\n"
+            textoMensaje = "<b>Descarta</b> tus peticiones haciendo clic en ellas.\n\nSi no quieres eliminar ninguna pulsa en <code>Cerrar</code>.\n"
             contador = 1
             botones = []
 
@@ -209,13 +202,7 @@ def command_controller(message):
                     WHERE p.status_id = %s AND p.chat_id = %s;
             """
 
-            # Ejecutar la consulta con el estado pendiente como parámetro
-            cursor = get_cursor(mydb)
-            executeQuery(cursor, query, (STATUS['PENDIENTE'], chatId))
-
-            # Obtener todos los resultados
-            resultados = cursor.fetchall()
-            cursor.close()
+            resultados = executeQuery(query, (STATUS['PENDIENTE'], chatId))
 
             if len(resultados) == 0:
                 x = bot.send_message(chatId, "<b>No</b> tienes peticiones pendientes ✅", parse_mode="html")
@@ -270,8 +257,8 @@ def command_controller(message):
             # El usuario sólamente ha introducido /send
             texto = 'Debes introducir algo como mensaje\n'
             texto += 'Ejemplo:\n'
-            texto += f'<code>{message.text} Hola a todos</code>\n\n'
-            texto += '<b>Importante</b>: Este mensaje lo frecibirán todos aquellos que hayan usado el bot y que no estén baneados.'
+            texto += f'<code>{comando} Hola a todos</code>\n\n'
+            texto += '<b>Importante</b>: Este mensaje lo recibirán todos aquellos que hayan usado el bot y que no estén baneados.'
             bot.send_message(chatId, texto, parse_mode="html")
             return 1;
 
@@ -304,7 +291,7 @@ def command_controller(message):
             # El usuario sólamente ha introducido /sendtouser o algo erroneo
             texto = 'Debes introducir el usuario y el mensaje que deseas enviar\n'
             texto += 'Ejemplo:\n'
-            texto += f'<code>{message.text} @periquito Hola a periquito</code>\n\n'
+            texto += f'<code>{comando} @periquito Hola a periquito</code>\n\n'
             texto += '<b>Importante</b>: Este mensaje lo recibirá el destinatario.'
             bot.send_message(chatId, texto, parse_mode="html")
             return 1;
@@ -314,10 +301,7 @@ def command_controller(message):
             FROM usuarios
             WHERE username = %s;
         """
-        cursor = get_cursor(mydb)
-        executeQuery(cursor, query, (username,))
-        result = cursor.fetchone()
-        cursor.close()
+        result = executeQuery(query, (username,))[0]
         if not result:
             debug(f"El usuario {username} no se encuentra registrado entre los usuarios.")
             return
@@ -393,10 +377,7 @@ def button_controller(call):
             bot.send_message(TELEGRAM_INTERNAL_CHAT, f'El usuario {name} ha intenado eliminar la petición {filmCode} ❌', parse_mode="html")
             return
         # Borramos la petición
-        cursor = get_cursor(mydb)
-        executeQuery(cursor, 'UPDATE peticiones SET status_id = %s WHERE film_code = %s', (STATUS['DENEGADA'], filmCode))
-        mydb.commit()
-        cursor.close()
+        executeQuery('UPDATE peticiones SET status_id = %s WHERE film_code = %s', (STATUS['DENEGADA'], filmCode), do_commit=True)
         bot.delete_message(chatId, messageId)
         bot.send_message(chatId, f'{previsualizeImage}La petición de {username} ha sido <b>eliminada</b> ✅', parse_mode="html")
         if not is_admin(chatId):
@@ -413,10 +394,7 @@ def button_controller(call):
         firstName, userId = result
         username = telegram_name_with_link(userId, firstName)
 
-        cursor = get_cursor(mydb)
-        executeQuery(cursor, 'UPDATE peticiones SET status_id = %s WHERE film_code = %s', (STATUS['COMPLETADA'], filmCode))
-        mydb.commit()
-        cursor.close()
+        executeQuery('UPDATE peticiones SET status_id = %s WHERE film_code = %s', (STATUS['COMPLETADA'], filmCode), do_commit=True)
 
         previsualizeImage = f'<a href="{read_cache_item_image(call.data)}"> </a>'
         bot.delete_message(chatId, messageId)
@@ -582,10 +560,7 @@ def get_data_from_peticion(filmCode):
         JOIN usuarios u ON p.chat_id = u.chat_id
         WHERE p.film_code = %s;
     """
-    cursor = get_cursor(mydb)
-    executeQuery(cursor, query, (filmCode,))
-    result = cursor.fetchone()
-    cursor.close()
+    result = executeQuery(query, (filmCode,))[0]
     return result
 
 def url_to_film_code(url):
@@ -616,20 +591,10 @@ def telegram_name_with_link(chatId, name):
     return f'<a href="tg://user?id={chatId}">{name}</a>'
 
 def get_all_active_users():
-    # Ejecutar la consulta con el estado pendiente como parámetro
-    cursor = get_cursor(mydb)
-    executeQuery(cursor, 'SELECT chat_id FROM usuarios WHERE allowed = 1')
-
-    # Obtener todos los resultados
-    resultados = cursor.fetchall()
-    cursor.close()
-    return resultados
+    return executeQuery('SELECT chat_id FROM usuarios WHERE allowed = 1')
 
 def check_owner_peticion(chatId, filmCode):
-    cursor = get_cursor(mydb)
-    executeQuery(cursor, 'SELECT COUNT(*) FROM peticiones WHERE chat_id = %s and film_code = %s', (chatId, filmCode))
-    result = cursor.fetchone()[0]
-    cursor.close()
+    result = executeQuery('SELECT COUNT(*) FROM peticiones WHERE chat_id = %s and film_code = %s', (chatId, filmCode))[0][0]
     return True if result != 0 else False
 
 def write_cache_item(title, url, filmCode):
@@ -638,17 +603,10 @@ def write_cache_item(title, url, filmCode):
         VALUES (%s, %s)
         ON DUPLICATE KEY UPDATE valor = %s
     """
-    cursor = get_cursor(mydb)
-    executeQuery(cursor, query, (filmCode, get_telegram_link(str(title).rstrip('\n'), str(url).rstrip('\n')), get_telegram_link(str(title).rstrip('\n'), str(url).rstrip('\n'))))
-    mydb.commit()
-    cursor.close()
+    executeQuery(query, (filmCode, get_telegram_link(str(title).rstrip('\n'), str(url).rstrip('\n')), get_telegram_link(str(title).rstrip('\n'), str(url).rstrip('\n'))), do_commit=True)
 
 def read_cache_item(filmCode):
-    cursor = get_cursor(mydb)
-    executeQuery(cursor, 'SELECT valor FROM cache WHERE clave = %s', (filmCode,))
-    result = cursor.fetchone()[0]
-    cursor.close()
-    return result
+    return executeQuery('SELECT valor FROM cache WHERE clave = %s', (filmCode,))[0][0]
 
 def write_cache_item_image(urlImage, filmCode):
     query = """
@@ -656,20 +614,12 @@ def write_cache_item_image(urlImage, filmCode):
         VALUES (%s, %s)
         ON DUPLICATE KEY UPDATE valor = %s
     """
-    cursor = get_cursor(mydb)
-    executeQuery(cursor, query, (f'{filmCode}_img', urlImage, urlImage))
-    mydb.commit()
-    cursor.close()
+    executeQuery(query, (f'{filmCode}_img', urlImage, urlImage), do_commit=True)
 
 def read_cache_item_image(url):
-    cursor = get_cursor(mydb)
     try:
-        executeQuery(cursor, 'SELECT valor FROM cache WHERE clave = %s', (f'{url_to_film_code(url)}_img',))
-        result = cursor.fetchone()[0]
-        cursor.close()
-        return result
+        return executeQuery('SELECT valor FROM cache WHERE clave = %s', (f'{url_to_film_code(url)}_img',))[0][0]
     except:
-        cursor.close()
         return generate_image_cache(url)
 
 def generate_image_cache(url):
@@ -688,23 +638,14 @@ def set_user_search(chatId, messageId, datos):
         VALUES (%s, %s)
         ON DUPLICATE KEY UPDATE valor = %s
     """
-    cursor = get_cursor(mydb)
-    executeQuery(cursor, query, (f'{chatId}_{messageId}', json.dumps(datos), json.dumps(datos)))
-    mydb.commit()
-    cursor.close()
+    executeQuery(query, (f'{chatId}_{messageId}', json.dumps(datos), json.dumps(datos)), do_commit=True)
 
 def get_user_search(chatId, messageId):
-    cursor = get_cursor(mydb)
-    executeQuery(cursor, 'SELECT valor FROM cache WHERE clave = %s', (f'{chatId}_{messageId}',))
-    result = json.loads(cursor.fetchone()[0])
-    cursor.close()
-    return result
+    result = executeQuery('SELECT valor FROM cache WHERE clave = %s', (f'{chatId}_{messageId}',))[0][0]
+    return json.loads(result)
 
 def delete_user_search(chatId, messageId):
-    cursor = get_cursor(mydb)
-    executeQuery(cursor, 'DELETE FROM cache WHERE clave = %s', (f'{chatId}_{messageId}',))
-    mydb.commit()
-    cursor.close()
+    executeQuery('DELETE FROM cache WHERE clave = %s', (f'{chatId}_{messageId}',), do_commit=True)
 
 def add_peticion_with_messages(chatId, messageId, name, url):
     linkTelegram = url_to_telegram_link(url)
@@ -728,15 +669,9 @@ def add_peticion(chatId, url):
         else:
             raise e
     if not update:
-        cursor = get_cursor(mydb)
-        executeQuery(cursor, 'INSERT INTO peticiones (chat_id, film_code, webpage_id, status_id) VALUES (%s, %s, %s, %s)', (chatId, url_to_film_code(url), WEBPAGE['FILMAFFINITY'] if is_filmaffinity_link(url) else WEBPAGE['IMDB'], STATUS['PENDIENTE']))
-        mydb.commit()
-        cursor.close()
+        executeQuery('INSERT INTO peticiones (chat_id, film_code, webpage_id, status_id) VALUES (%s, %s, %s, %s)', (chatId, url_to_film_code(url), WEBPAGE['FILMAFFINITY'] if is_filmaffinity_link(url) else WEBPAGE['IMDB'], STATUS['PENDIENTE']), do_commit=True)
     else:
-        cursor = get_cursor(mydb)
-        executeQuery(cursor, 'UPDATE peticiones SET status_id = %s WHERE film_code = %s', (STATUS['PENDIENTE'], url_to_film_code(url)))
-        mydb.commit()
-        cursor.close()
+        executeQuery('UPDATE peticiones SET status_id = %s WHERE film_code = %s', (STATUS['PENDIENTE'], url_to_film_code(url)), do_commit=True)
 
 def update_user(call):
     chatId = call.from_user.id
@@ -747,12 +682,9 @@ def update_user(call):
         VALUES (%s, %s, %s)
         ON DUPLICATE KEY UPDATE name = %s, username = %s
     """
-    cursor = get_cursor(mydb)
-    executeQuery(cursor, query, (chatId, name, username, name, username))
-    mydb.commit()
-    cursor.close()
+    executeQuery(query, (chatId, name, username, name, username), do_commit=True)
 
-def debug(message, html=None):
+def debug(message, html=False):
     print(message)
     if html:
         bot.send_message(TELEGRAM_INTERNAL_CHAT, message, disable_web_page_preview=True, parse_mode="html")
@@ -760,19 +692,15 @@ def debug(message, html=None):
         bot.send_message(TELEGRAM_INTERNAL_CHAT, message, disable_web_page_preview=True)
 
 def check_if_exist_peticion(url):
-    cursor = get_cursor(mydb)
-    executeQuery(cursor, 
-                '''
-                SELECT s.id, s.description
-                FROM peticiones p
-                INNER JOIN status s ON p.status_id = s.id
-                WHERE p.film_code = %s
-                ''',
-                (url_to_film_code(url),)
-            )
-    result = cursor.fetchone()
-    cursor.close()
-    if result is not None:
+    query = """
+        SELECT s.id, s.description
+        FROM peticiones p
+        INNER JOIN status s ON p.status_id = s.id
+        WHERE p.film_code = %s
+    """
+    result = executeQuery(query, (url_to_film_code(url),))
+    if result:
+        result = result[0]
         raise PeticionExiste(result[0], result[1])
 
 def obtain_link_from_string(text):
@@ -807,23 +735,14 @@ def extract_filmname_from_telegram_link(telegram_link):
         return None
 
 def is_user_allowed(chatId):
-    cursor = get_cursor(mydb)
-    executeQuery(cursor, 'SELECT allowed FROM usuarios WHERE chat_id = %s', (chatId,))
-    result = cursor.fetchone()[0]
-    cursor.close()
+    result = executeQuery('SELECT allowed FROM usuarios WHERE chat_id = %s', (chatId,))[0][0]
     return bool(result)
 
 def ban_user(username):
-    cursor = get_cursor(mydb)
-    executeQuery(cursor, 'UPDATE usuarios SET allowed = false WHERE username = %s', (username,))
-    mydb.commit()
-    cursor.close()
+    executeQuery('UPDATE usuarios SET allowed = false WHERE username = %s', (username,), do_commit=True)
 
 def unban_user(username):
-    cursor = get_cursor(mydb)
-    executeQuery(cursor, 'UPDATE usuarios SET allowed = true WHERE username = %s', (username,))
-    mydb.commit()
-    cursor.close()
+    executeQuery('UPDATE usuarios SET allowed = true WHERE username = %s', (username,), do_commit=True)
 
 class PeticionExiste(Exception):
     def __init__(self, code, status):
@@ -843,81 +762,74 @@ class PeticionExiste(Exception):
 # =================
 # =================
 
-def create_tables_default(mydb):
+def create_tables_default():
     print("Creando tablas si no existen")
 
-    cursor = get_cursor(mydb)
-
     # Verifica si las tablas ya existen
-    executeQuery(cursor, "SHOW TABLES LIKE 'usuarios'")
-    usuarios_exists = cursor.fetchone()
+    usuarios_exists = executeQuery("SHOW TABLES LIKE 'usuarios'")
     print(f'TABLE usuarios existe: {usuarios_exists}')
 
-    executeQuery(cursor, "SHOW TABLES LIKE 'peticiones'")
-    peticiones_exists = cursor.fetchone()
+    peticiones_exists = executeQuery("SHOW TABLES LIKE 'peticiones'")
     print(f'TABLE peticiones existe: {peticiones_exists}')
 
-    executeQuery(cursor, "SHOW TABLES LIKE 'cache'")
-    cache_exists = cursor.fetchone()
+    cache_exists = executeQuery("SHOW TABLES LIKE 'cache'")
     print(f'TABLE cache existe: {cache_exists}')
 
-    executeQuery(cursor, "SHOW TABLES LIKE 'status'")
-    status_exist = cursor.fetchone()
+    status_exist = executeQuery("SHOW TABLES LIKE 'status'")
     print(f'TABLE status existe: {status_exist}')
 
-    executeQuery(cursor, "SHOW TABLES LIKE 'webpage'")
-    webpage_exist = cursor.fetchone()
+    webpage_exist = executeQuery("SHOW TABLES LIKE 'webpage'")
     print(f'TABLE webpage existe: {webpage_exist}')
     
     # Si las tablas no existen, créalas
     if not usuarios_exists:
         # Crear tabla de usuarios
-        executeQuery(cursor, """
+        executeQuery("""
             CREATE TABLE usuarios (
                 chat_id BIGINT PRIMARY KEY,
                 name VARCHAR(255) NOT NULL,
                 username VARCHAR(255),
                 allowed BOOLEAN DEFAULT TRUE
             )
-        """)
+        """, do_commit=True)
 
     if not status_exist:
         # Crear tabla de status
-        executeQuery(cursor, """
+        executeQuery("""
             CREATE TABLE status (
                 id INT PRIMARY KEY,
                 description VARCHAR(255) NOT NULL
             )
-        """)
+        """, do_commit=True)
         # Insertar valores por defecto solo si no existen
-        executeQuery(cursor, 'INSERT INTO status (id, description) SELECT 0, "pendiente" WHERE NOT EXISTS (SELECT 1 FROM status WHERE id = 0)')
-        executeQuery(cursor, 'INSERT INTO status (id, description) SELECT 1, "completada" WHERE NOT EXISTS (SELECT 1 FROM status WHERE id = 1)')
-        executeQuery(cursor, 'INSERT INTO status (id, description) SELECT 2, "denegada" WHERE NOT EXISTS (SELECT 1 FROM status WHERE id = 2)')
+        executeQuery('INSERT INTO status (id, description) SELECT 0, "pendiente" WHERE NOT EXISTS (SELECT 1 FROM status WHERE id = 0)', do_commit=True)
+        executeQuery('INSERT INTO status (id, description) SELECT 1, "completada" WHERE NOT EXISTS (SELECT 1 FROM status WHERE id = 1)', do_commit=True)
+        executeQuery('INSERT INTO status (id, description) SELECT 2, "denegada" WHERE NOT EXISTS (SELECT 1 FROM status WHERE id = 2)', do_commit=True)
 
     if not webpage_exist:
         # Crear tabla de status
-        executeQuery(cursor, """
+        executeQuery("""
             CREATE TABLE webpage (
                 id INT PRIMARY KEY,
                 description VARCHAR(50) NOT NULL
             )
-        """)
+        """, do_commit=True)
         # Insertar valores por defecto solo si no existen
-        executeQuery(cursor, 'INSERT INTO webpage (id, description) SELECT 0, "filmaffinity" WHERE NOT EXISTS (SELECT 1 FROM webpage WHERE id = 0)')
-        executeQuery(cursor, 'INSERT INTO webpage (id, description) SELECT 1, "imdb" WHERE NOT EXISTS (SELECT 1 FROM webpage WHERE id = 1)')
+        executeQuery('INSERT INTO webpage (id, description) SELECT 0, "filmaffinity" WHERE NOT EXISTS (SELECT 1 FROM webpage WHERE id = 0)', do_commit=True)
+        executeQuery('INSERT INTO webpage (id, description) SELECT 1, "imdb" WHERE NOT EXISTS (SELECT 1 FROM webpage WHERE id = 1)', do_commit=True)
 
     if not cache_exists:
         # Crear tabla de cache
-        executeQuery(cursor, """
+        executeQuery("""
             CREATE TABLE cache (
                 clave VARCHAR(255) PRIMARY KEY,
                 valor TEXT
             )
-        """)
+        """, do_commit=True)
 
     if not peticiones_exists:
         # Crear tabla de peticiones
-        executeQuery(cursor, """
+        executeQuery("""
             CREATE TABLE peticiones (
                 id INT AUTO_INCREMENT PRIMARY KEY,
                 chat_id BIGINT NOT NULL,
@@ -928,12 +840,8 @@ def create_tables_default(mydb):
                 FOREIGN KEY (status_id) REFERENCES status(id),
                 FOREIGN KEY (webpage_id) REFERENCES webpage(id)
             )
-        """)
-        
+        """, do_commit=True)
     print("Tablas correctas")
-    mydb.commit()
-    # Cerrar la conexión
-    cursor.close()
 
 def conectar():
     print("Conectando a BBDD")
@@ -946,28 +854,41 @@ def conectar():
         database=DATABASE_NAME
     )
 
-def get_cursor(mydb):
-    if mydb is None or not mydb.is_connected():
-        print("Intentando reconectar...")
-        mydb = conectar()
-        print("Reconectado")
-    return mydb.cursor()
+def executeQuery(query, values=None, do_commit=False, debug=False):
+    mydb = conectar()
+    cursor = mydb.cursor()
 
-def executeQuery(cursor, query, values=None):
-    if BASIC_CONFIG['DEBUG_SQL'] == 1:
+    if debug:
         if values is not None:
-            debug(f"SQL Query: {query % values}")
+            debug(f'SQL Query: {query}')
+            debug(f'SQL Values: {values}')
         else:
-            debug(f"SQL Query: {query}")
+            debug(f'SQL Query: {query}')
 
     try:
         if values is not None:
-            return cursor.execute(query, values)
+            cursor.execute(query, values)
         else:
-            return cursor.execute(query)
-    except:
-        mydb = conectar()
-        executeQuery(get_cursor(mydb), query, values)
+            cursor.execute(query)
+
+        if query.strip().lower().startswith("select") or query.strip().lower().startswith("show"):
+            # Devuelve los resultados solo si es una consulta SELECT o SHOW
+            results = cursor.fetchall()
+            if debug:
+                debug(results)
+        else:
+            results = None
+    except Exception as e:
+        print(f"Error executing query: {e}")
+        raise
+    finally:
+        if do_commit:
+            mydb.commit()
+        cursor.close()
+        mydb.close()
+
+    return results
+
 
 # ===============================
 # ===============================
@@ -984,15 +905,15 @@ def executeQuery(cursor, query, values=None):
 # MAIN
 if __name__ == '__main__':
     print(f'Iniciando Bot de peticiones en {SERVER_NAME}')
-    time.sleep(5) # Esperamos a la BBDD por si se está arrancando
-    mydb = conectar()
-    create_tables_default(mydb)
+    time.sleep(10) # Esperamos a la BBDD por si se está arrancando
+    create_tables_default()
     bot.set_my_commands([ # Comandos a mostrar en el menú de Telegram
         telebot.types.BotCommand("/start", "Da la bienvenida"),
         telebot.types.BotCommand("/busca", f'Busca en {SEARCH_ENGINE}'),
         telebot.types.BotCommand("/list",  "Utilidad para completar o descartar peticiones"),
         telebot.types.BotCommand("/ban",  "<ADMIN> Utilidad para banear usuarios"),
         telebot.types.BotCommand("/unban",  "<ADMIN> Utilidad para desbanear usuarios"),
-        telebot.types.BotCommand("/send",  "<ADMIN> Utilidad para escribir a todos los usuarios")
+        telebot.types.BotCommand("/send",  "<ADMIN> Utilidad para escribir a todos los usuarios"),
+        telebot.types.BotCommand("/sendtouser",  "<ADMIN> Utilidad para escribir a un los usuario")
         ])
     bot.infinity_polling() # Arranca la detección de nuevos comandos 
