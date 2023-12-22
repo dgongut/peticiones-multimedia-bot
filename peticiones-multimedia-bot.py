@@ -10,6 +10,8 @@ import json
 import re
 import sys
 
+VERSION = "3.1.0"
+
 # Comprobación inicial de variables
 if "abc" == TELEGRAM_TOKEN:
     print("Se necesita configurar el token del bot con la variable TELEGRAM_TOKEN")
@@ -98,7 +100,7 @@ WEBPAGE = {
 # =======================================================================
 
 # Respondemos a los comandos /XXXX
-@bot.message_handler(commands=["start", "list", "busca", "ban", "unban", "send", "sendtouser"])
+@bot.message_handler(commands=["start", "list", "busca", "ban", "unban", "send", "sendtouser", "version"])
 def command_controller(message):
     chatId = message.chat.id
     comando = message.text.split()[0]
@@ -307,6 +309,9 @@ def command_controller(message):
             return
         bot.send_message(result[0], textoAEnviar, parse_mode="Markdown")
         bot.send_message(chatId, f'Se ha difundido el mensaje: {textoAEnviar}', parse_mode="Markdown")
+    
+    elif comando in ('/version'):    
+        bot.send_message(chatId, f'<i>Version: {VERSION}</i>', parse_mode="HTML")
 
     elif not is_admin(chatId):
         """Un usuario normal ha introducido un comando"""
@@ -682,7 +687,9 @@ def update_user(call):
         VALUES (%s, %s, %s)
         ON DUPLICATE KEY UPDATE name = %s, username = %s
     """
-    executeQuery(query, (chatId, name, username, name, username), do_commit=True)
+    result = executeQuery(query, (chatId, name, username, name, username), do_commit=True)
+    if result == 1:
+        bot.send_message(TELEGRAM_INTERNAL_CHAT, f"Se ha actualizado la lista de usuarios con: {telegram_name_with_link(chatId, name)}", parse_mode="html")
 
 def debug(message, html=False):
     print(message)
@@ -876,6 +883,11 @@ def executeQuery(query, values=None, do_commit=False, debug=False):
             results = cursor.fetchall()
             if debug:
                 debug(results)
+        elif query.strip().lower().startswith("insert") or query.strip().lower().startswith("update"):
+            # Devuelve el numero de resultados insertados/actualizados
+            results = cursor.rowcount
+            if debug:
+                debug(results)
         else:
             results = None
     except Exception as e:
@@ -911,9 +923,9 @@ if __name__ == '__main__':
         telebot.types.BotCommand("/start", "Da la bienvenida"),
         telebot.types.BotCommand("/busca", f'Busca en {SEARCH_ENGINE}'),
         telebot.types.BotCommand("/list",  "Utilidad para completar o descartar peticiones"),
-        telebot.types.BotCommand("/ban",  "<ADMIN> Utilidad para banear usuarios"),
-        telebot.types.BotCommand("/unban",  "<ADMIN> Utilidad para desbanear usuarios"),
+        telebot.types.BotCommand("/ban",   "<ADMIN> Utilidad para banear usuarios"),
+        telebot.types.BotCommand("/unban", "<ADMIN> Utilidad para desbanear usuarios"),
         telebot.types.BotCommand("/send",  "<ADMIN> Utilidad para escribir a todos los usuarios"),
-        telebot.types.BotCommand("/sendtouser",  "<ADMIN> Utilidad para escribir a un los usuario")
+        telebot.types.BotCommand("/sendtouser", "<ADMIN> Utilidad para escribir a un usuario")
         ])
     bot.infinity_polling() # Arranca la detección de nuevos comandos 
