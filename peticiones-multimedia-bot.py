@@ -10,7 +10,7 @@ import json
 import re
 import sys
 
-VERSION = "3.1.0"
+VERSION = "3.2.0"
 
 # Comprobación inicial de variables
 if "abc" == TELEGRAM_TOKEN:
@@ -108,27 +108,35 @@ def command_controller(message):
     if not is_user_allowed(chatId):
         bot.send_message(chatId, "Lamentablemente, <b>has sido baneado del bot.</b>", parse_mode="html")
         return
+    
+    if not message.from_user.username:
+        bot.send_message(chatId, f"⚠️ Por favor {message.from_user.first_name}, para un correcto funcionamiento del bot, *es necesario que te establezcas un nombre de usuario*.\n\nSe establece en Telegram->Ajustes->Editar->Nombre de usuario.", parse_mode="markdown")
 
     if comando in ('/start'):
         texto_inicial = ""
         if not is_admin(chatId):
             """Da la bienvenida al usuario"""
-            texto_inicial = f'Bienvenido al bot de peticiones <b>{SERVER_NAME}</b>\n\n'
-            texto_inicial += f'A continuación puedes compartir enlaces de <a href="https://www.filmaffinity.com/es/main.html">Filmaffinity</a> ó <a href="https://www.imdb.com">IMDb</a> para que se añadan a {SERVER_NAME}\n\n'
-            texto_inicial += f'También puedes buscar directamente en {SEARCH_ENGINE} escribiendo lo siguiente:\n<code>/busca Gladiator</code>\n'
-            texto_inicial += 'Con el comando:\n<code>/list</code>\nPodrás <b>borrar</b> tus peticiones pendientes\n\n'
-            texto_inicial += 'Serás avisado cuando se inicie su descarga'
+            texto_inicial = f'🎥 Bienvenido al bot de peticiones *{SERVER_NAME}* querido usuario.\n\n'
+            texto_inicial += f'A continuación puedes compartir enlaces de [FilmAffinity](https://www.filmaffinity.com/es/main.html) ó [IMDb](https://www.imdb.com) para que se añadan a {SERVER_NAME}\n\n'
+            texto_inicial += f'➡️ Comandos disponibles:\n\n'
+            texto_inicial += f' · /list Lista tus peticiones pendientes de completar.\n'
+            texto_inicial += f' · /busca <Pelicula/Serie> buscará en {SEARCH_ENGINE}.\n'
+            texto_inicial += f' · /version Muestra la versión actual.\n'
         else:
             """Da la bienvenida al Administrador"""
-            texto_inicial = f'Bienvenido al bot de peticiones <b>{SERVER_NAME}</b>\n\n'
-            texto_inicial += 'A continuación puedes gestionar las peticiones de <a href="https://www.filmaffinity.com/es/main.html">Filmaffinity</a> y <a href="https://www.imdb.com">IMDb</a>\n\n'
-            texto_inicial += 'Con el comando:\n<code>/list</code>\nPodrás marcar para <b>completar</b> o <b>borrar</b> las peticiones pendientes\n\n'
-            texto_inicial += 'Cada una de estas acciones avisará al usuario'
-        bot.send_message(chatId, texto_inicial, parse_mode="html", disable_web_page_preview=True)
+            texto_inicial = f'🎥 Bienvenido al bot de peticiones *{SERVER_NAME}* querido administrador.\n\n'
+            texto_inicial += f'➡️ Comandos disponibles:\n\n'
+            texto_inicial += f' · /list Lista las peticiones pendientes de completar.\n'
+            texto_inicial += f' · /ban <usuario> banea a un usuario.\n'
+            texto_inicial += f' · /unban <usuario> desbanea a un usuario.\n'
+            texto_inicial += f' · /send Envía un mensaje a todos los usuarios no baneados.\n'
+            texto_inicial += f' · /sendtouser <usuario> envía un mensaje al usuario descrito.\n'
+            texto_inicial += f' · /version Muestra la versión actual.\n'
+        bot.send_message(chatId, texto_inicial, parse_mode="markdown", disable_web_page_preview=True)
        
     elif comando in ('/busca'):
         if is_admin(chatId):
-            x = bot.send_message(chatId, "Esta función está dedicada para los usuarios, <b>no para el administrador.</b>", parse_mode="html")
+            x = bot.send_message(chatId, "❌ Esta función está dedicada para los usuarios, <b>no para el administrador.</b>", parse_mode="html")
             time.sleep(BASIC_CONFIG['DELETE_TIME'])
             bot.delete_message(chatId, message.message_id)
             bot.delete_message(chatId, x.message_id)
@@ -136,12 +144,12 @@ def command_controller(message):
             textoBuscar = " ".join(message.text.split()[1:])
             if not textoBuscar: 
                 # El usuario sólamente ha introducido /busca
-                texto = 'Debes introducir algo en la búsqueda\n'
+                texto = '❌ Debes introducir algo en la búsqueda\n'
                 texto += 'Ejemplo:\n'
                 texto += f'<code>{message.text} Gladiator</code>\n\n'
                 texto += '<b>Importante</b>: No incluyas el año en la búsqueda'
                 bot.send_message(chatId, texto, parse_mode="html")
-                return 1;
+                return 1
 
             if is_search_engine_filmaffinity():
                 elements = filmaffinity_search(textoBuscar)
@@ -157,7 +165,7 @@ def command_controller(message):
         bot.delete_message(chatId, message.message_id)
         if is_admin(chatId):
             markup = InlineKeyboardMarkup(row_width = 3)
-            textoMensaje = "<b>Completa</b> o <b>descarta</b> peticiones:\n"
+            textoMensaje = "📃 <b>Completa</b> o <b>descarta</b> peticiones:\n"
             contador = 1
             botones = []
 
@@ -192,8 +200,8 @@ def command_controller(message):
             markup.add(InlineKeyboardButton("❌ - Cerrar", callback_data="cerrar"))
             bot.send_message(chatId, textoMensaje, reply_markup=markup, disable_web_page_preview=True, parse_mode="html")
         else:
-            markup = InlineKeyboardMarkup(row_width = 1)
-            textoMensaje = "<b>Descarta</b> tus peticiones haciendo clic en ellas.\n\nSi no quieres eliminar ninguna pulsa en <code>Cerrar</code>.\n"
+            markup = InlineKeyboardMarkup(row_width = 2)
+            textoMensaje = "<b>Descarta</b> tus peticiones haciendo clic la 🗑️.\n\nSi no quieres eliminar ninguna pulsa en <code>Cerrar</code>.\n"
             contador = 1
             botones = []
 
@@ -218,7 +226,8 @@ def command_controller(message):
                 url = film_code_to_url(film_code, webpage)
                 telegram_link = url_to_telegram_link(url)
                 name = telegram_name_with_link(userId, name)
-                botones.append(InlineKeyboardButton(f'🗑️ {str(contador)}: {extract_filmname_from_telegram_link(telegram_link)}', callback_data=f'D|{url}'))
+                botones.append(InlineKeyboardButton(f'{str(contador)}: {extract_filmname_from_telegram_link(telegram_link)}', url=url))
+                botones.append(InlineKeyboardButton(f'🗑️', callback_data=f'D|{url}'))
                 contador += 1
 
             markup.add(*botones)
@@ -229,15 +238,16 @@ def command_controller(message):
         """Comando lista"""
         if not is_admin(chatId):
             user_introduces_admin_command(message)
-            return;
+            return
+        
         userToBanOrUnBan = " ".join(message.text.split()[1:])
         if not userToBanOrUnBan or not userToBanOrUnBan.startswith('@'): 
             # El usuario sólamente ha introducido /ban
-            texto = 'Debes introducir el nombre de usuario con el @\n'
+            texto = '❌ Debes introducir el nombre de usuario con el @\n'
             texto += 'Ejemplo:\n'
             texto += f'<code>{message.text} @periquito</code>\n\n'
             bot.send_message(chatId, texto, parse_mode="html")
-            return 1;
+            return 1
 
         try:
             if comando in ('/ban'):
@@ -252,17 +262,17 @@ def command_controller(message):
     elif comando in ('/send'):
         if not is_admin(chatId):
             user_introduces_admin_command(message)
-            return;
+            return
 
         textoAEnviar = " ".join(message.text.split()[1:])
         if not textoAEnviar: 
             # El usuario sólamente ha introducido /send
-            texto = 'Debes introducir algo como mensaje\n'
+            texto = '❌ Debes introducir algo como mensaje\n'
             texto += 'Ejemplo:\n'
             texto += f'<code>{comando} Hola a todos</code>\n\n'
             texto += '<b>Importante</b>: Este mensaje lo recibirán todos aquellos que hayan usado el bot y que no estén baneados.'
             bot.send_message(chatId, texto, parse_mode="html")
-            return 1;
+            return 1
 
         users = get_all_active_users()
         for user in users:
@@ -276,7 +286,7 @@ def command_controller(message):
     elif comando in ('/sendtouser'):
         if not is_admin(chatId):
             user_introduces_admin_command(message)
-            return;
+            return
 
         patron = r'/sendtouser @(\S+) (.+)'
         username = None
@@ -291,12 +301,12 @@ def command_controller(message):
             textoAEnviar = coincidencia.group(2)
         else: 
             # El usuario sólamente ha introducido /sendtouser o algo erroneo
-            texto = 'Debes introducir el usuario y el mensaje que deseas enviar\n'
+            texto = '❌ Debes introducir el usuario y el mensaje que deseas enviar\n'
             texto += 'Ejemplo:\n'
             texto += f'<code>{comando} @periquito Hola a periquito</code>\n\n'
             texto += '<b>Importante</b>: Este mensaje lo recibirá el destinatario.'
             bot.send_message(chatId, texto, parse_mode="html")
-            return 1;
+            return 1
 
         query = """
             SELECT chat_id
@@ -310,8 +320,11 @@ def command_controller(message):
         bot.send_message(result[0], textoAEnviar, parse_mode="Markdown")
         bot.send_message(chatId, f'Se ha difundido el mensaje: {textoAEnviar}', parse_mode="Markdown")
     
-    elif comando in ('/version'):    
-        bot.send_message(chatId, f'<i>Version: {VERSION}</i>', parse_mode="HTML")
+    elif comando in ('/version'):
+        bot.delete_message(chatId, message.id)
+        x = bot.send_message(chatId, f'⚙️ _Versión: {VERSION}_\nDesarrollado con ❤️ por @dgongut\n\nSi encuentras cualquier fallo o sugerencia contáctame.\n\nPuedes encontrar todo lo relacionado con este bot en [DockerHub](https://hub.docker.com/r/dgongut/peticiones-multimedia-bot) o en [GitHub](https://github.com/dgongut/peticiones-multimedia-bot)', parse_mode="markdown")
+        time.sleep(15)
+        bot.delete_message(chatId, x.message_id)
 
     elif not is_admin(chatId):
         """Un usuario normal ha introducido un comando"""
@@ -324,10 +337,14 @@ def text_controller(message):
     name = telegram_name_with_link(chatId, message.from_user.first_name)
     update_user(message)
     if not is_user_allowed(chatId):
-        bot.send_message(chatId, "Lamentablemente, <b>has sido baneado del bot.</b>", parse_mode="html")
+        bot.send_message(chatId, "❌ Lamentablemente, <b>has sido baneado del bot.</b>", parse_mode="html")
         return
+
+    if not message.from_user.username:
+        bot.send_message(chatId, f"⚠️ Por favor {message.from_user.first_name}, para un correcto funcionamiento del bot, *es necesario que te establezcas un nombre de usuario*.\n\nSe establece en Telegram->Ajustes->Editar->Nombre de usuario.", parse_mode="markdown")
+
     if message.text.startswith("/"):
-        x = bot.send_message(chatId, "Comando no permitido, se reportará al administrador")
+        x = bot.send_message(chatId, "❌ Comando no permitido, se reportará al administrador")
         bot.send_message(TELEGRAM_INTERNAL_CHAT, f'{name} ha enviado {message.text}', parse_mode="html")
         time.sleep(BASIC_CONFIG['DELETE_TIME'])
         bot.delete_message(chatId, message.message_id)
@@ -335,7 +352,7 @@ def text_controller(message):
     
     elif "filmaffinity.com" in message.text or "imdb.com" in message.text:
         if is_admin(chatId):
-            x = bot.send_message(chatId, "El administrador no puede realizar peticiones")
+            x = bot.send_message(chatId, "❌ El administrador no puede realizar peticiones")
             time.sleep(BASIC_CONFIG['DELETE_TIME'])
             bot.delete_message(chatId, message.message_id)
             bot.delete_message(chatId, x.message_id)
@@ -348,11 +365,11 @@ def text_controller(message):
             enlaceEncontrado = enlace.group()
             add_peticion_with_messages(chatId, message.message_id, name, enlaceEncontrado)
         else:
-            bot.send_message(chatId, "Enlace no válido.")
+            bot.send_message(chatId, "❌ Enlace no válido.")
             bot.send_message(TELEGRAM_INTERNAL_CHAT, f'{name} ha enviado {message.text}', parse_mode="html")
         
     else:
-        x = bot.send_message(chatId, "Este bot no es conversacional, el administrador <b>no recibirá</b> el mensaje si no va junto al enlace de Filmaffinity o IMDb\n\nProcedo a borrar los mensajes", parse_mode="html")
+        x = bot.send_message(chatId, "❌ Este bot no es conversacional, el administrador <b>no recibirá</b> el mensaje si no va junto al enlace de Filmaffinity o IMDb\n\nProcedo a borrar los mensajes", parse_mode="html")
         time.sleep(BASIC_CONFIG['DELETE_TIME'])
         bot.delete_message(chatId, message.message_id)
         bot.delete_message(chatId, x.message_id)
@@ -662,7 +679,7 @@ def add_peticion_with_messages(chatId, messageId, name, url):
         bot.send_message(TELEGRAM_INTERNAL_CHAT, f'{previsualizeImage}Nueva petición de {name}:\n{linkTelegram}', parse_mode="html")
         time.sleep(BASIC_CONFIG['EDIT_TIME'])
     except PeticionExiste as e:
-        bot.send_message(chatId, f'{previsualizeImage}{name}, la petición: {url_to_telegram_link(url)} ya se encuentra añadida y está en estado {e.status}.', parse_mode="html")
+        bot.send_message(chatId, f'❌ {previsualizeImage}{name}, la petición: {url_to_telegram_link(url)} ya se encuentra añadida y está en estado {e.status}.', parse_mode="html")
 
 def add_peticion(chatId, url):
     update = False
@@ -689,7 +706,7 @@ def update_user(call):
     """
     result = executeQuery(query, (chatId, name, username, name, username), do_commit=True)
     if result == 1:
-        bot.send_message(TELEGRAM_INTERNAL_CHAT, f"Se ha actualizado la lista de usuarios con: {telegram_name_with_link(chatId, name)}", parse_mode="html")
+        bot.send_message(TELEGRAM_INTERNAL_CHAT, f"Un nuevo usuario ha utilizado el bot: {telegram_name_with_link(chatId, name)}", parse_mode="html")
 
 def debug(message, html=False):
     print(message)
@@ -716,7 +733,7 @@ def obtain_link_from_string(text):
 
 def is_peticion_deletable(peticion):
     # Las peticiones que están marcadas para borrar comienzan con D|
-    return peticion.startswith('D|');
+    return peticion.startswith('D|')
 
 def is_admin(chatId):
     return chatId == TELEGRAM_ADMIN
