@@ -4,13 +4,14 @@ import telebot
 import mysql.connector
 from telebot.types import InlineKeyboardMarkup
 from telebot.types import InlineKeyboardButton
+from plexapi.server import PlexServer
 import time
 import requests
 import json
 import re
 import sys
 
-VERSION = "3.2.0"
+VERSION = "4.0.0"
 
 # Comprobación inicial de variables
 if "abc" == TELEGRAM_TOKEN:
@@ -67,8 +68,22 @@ if "abc" == DATABASE_USER:
     print(msg)
     sys.exit(1)
 
+if ("abc" != PLEX_TOKEN and "abc" == PLEX_HOST) or ("abc" == PLEX_TOKEN and "abc" != PLEX_HOST):
+    msg = "Si se desa conectarse con Plex, tanto PLEX_HOST como PLEX_TOKEN han de estar correctamente cumplimentadas"
+    print(msg)
+    sys.exit(1)
+
+def is_plex_linked():
+    return "abc" != PLEX_TOKEN and "abc" != PLEX_HOST
+
 # Instanciamos el bot
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
+if is_plex_linked():
+    try:
+        plex = PlexServer(PLEX_HOST, PLEX_TOKEN)
+    except Exception as e:
+        print(f"Error al conectar con Plex, revise los datos de conexion. PLEX_HOST ha de llevar http:// o https://. Error: [{e}]")
+        sys.exit(1)
 
 # CONSTANTES NO CONFIGURABLES
 BASIC_CONFIG = {
@@ -351,10 +366,10 @@ def text_controller(message):
         bot.delete_message(chatId, x.message_id)
     
     elif "filmaffinity.com" in message.text or "imdb.com" in message.text:
+        bot.delete_message(chatId, message.message_id)
         if is_admin(chatId):
             x = bot.send_message(chatId, "❌ El administrador no puede realizar peticiones")
             time.sleep(BASIC_CONFIG['DELETE_TIME'])
-            bot.delete_message(chatId, message.message_id)
             bot.delete_message(chatId, x.message_id)
             return
 
@@ -363,7 +378,10 @@ def text_controller(message):
 
         if enlace:
             enlaceEncontrado = enlace.group()
-            add_peticion_with_messages(chatId, message.message_id, name, enlaceEncontrado)
+            if not is_plex_linked():
+                add_peticion_with_messages(chatId, name, enlaceEncontrado)
+            else:
+                plex_search_and_dispatch(chatId, name, enlaceEncontrado)
         else:
             bot.send_message(chatId, "❌ Enlace no válido.")
             bot.send_message(TELEGRAM_INTERNAL_CHAT, f'{name} ha enviado {message.text}', parse_mode="html")
@@ -427,33 +445,39 @@ def button_controller(call):
     # Dado que el administrador es el único que no puede usar el buscador, solo queda que sea un usuario con los botones de paginación
     else: 
         """Gestiona las pulsaciones de los botones de paginación"""
-        # (call.data es una URL)
-        datos = get_user_search(chatId, messageId)
-        
-        if call.data == "anterior":
-            if datos["pag"] == 0:
-                bot.answer_callback_query(call.id, "Ya estás en la primera página")
+        # (call.data es una URL o una peticion confirmada empezando por C|
+        if call.data in ("anterior", "siguiente"):
+            datos = get_user_search(chatId, messageId)
+            if call.data == "anterior":
+                if datos["pag"] == 0:
+                    bot.answer_callback_query(call.id, "Ya estás en la primera página")
+                
+                else:
+                    datos["pag"] -= 1
+                    set_user_search(chatId, messageId, datos)
+                    display_page(datos["lista"], chatId, datos["pag"], messageId)
+                return
             
-            else:
-                datos["pag"] -= 1
-                set_user_search(chatId, messageId, datos)
-                display_page(datos["lista"], chatId, datos["pag"], messageId)
-            return
-        
-        elif call.data == "siguiente":
-            if datos["pag"] * RESULTADOS_POR_PAGINA + RESULTADOS_POR_PAGINA >= len(datos["lista"]):
-                bot.answer_callback_query(call.id, "Ya estás en la última página")
-            
-            else:
-                datos["pag"] += 1
-                set_user_search(chatId, messageId, datos)
-                display_page(datos["lista"], chatId, datos["pag"], messageId)
-            return
-        
+            elif call.data == "siguiente":
+                if datos["pag"] * RESULTADOS_POR_PAGINA + RESULTADOS_POR_PAGINA >= len(datos["lista"]):
+                    bot.answer_callback_query(call.id, "Ya estás en la última página")
+                
+                else:
+                    datos["pag"] += 1
+                    set_user_search(chatId, messageId, datos)
+                    display_page(datos["lista"], chatId, datos["pag"], messageId)
+                return
         else:
-            # Ha pulsado en un resultado para hacer la petición
-            add_peticion_with_messages(chatId, messageId, name, call.data)
             delete_user_search(chatId, messageId)
+            bot.delete_message(chatId, messageId)
+            # Ha pulsado en un resultado para hacer la petición
+            if is_peticion_confirmed(call.data) or not is_plex_linked():
+                url = call.data
+                if is_peticion_confirmed(call.data):
+                    url = call.data[2:]
+                add_peticion_with_messages(chatId, name, url)
+            elif is_plex_linked():
+                plex_search_and_dispatch(chatId, name, call.data)
 
 # ==============================================================
 # ==============================================================
@@ -466,6 +490,31 @@ def button_controller(call):
 #
 # ==============================================================
 # ==============================================================
+                
+def plex_search_and_dispatch(chatId, name, url):
+    filmName = extract_filmname_from_telegram_link(url_to_telegram_link(url))
+    search_results = plex.search(re.sub(r'\([^)]*\)', '', filmName))
+    print(f'Buscando por "{filmName}": {search_results}')
+    if search_results:
+        textConfirmation = f"🔎 Se ha encontrado contenido en <b>{SERVER_NAME}</b> que podría coincidir con tu solicitud.\n\n"
+        textConfirmation += f"Has querido solicitar: {url_to_telegram_link(url)}\n\n"
+        textConfirmation += f"En <b>{SERVER_NAME}</b> se ha encontrado:\n\n"
+        contador = 0
+        for item in search_results:
+            if item.type in ("movie", "show"):
+                textConfirmation += f" · {item.title} ({item.year})\n"
+                contador += 1
+        if contador == 0:
+            add_peticion_with_messages(chatId, name, url)
+        textConfirmation += "\nSi lo que quieres pedir no se encuentra entre los resultados, puedes confirmar la petición. En caso contrario puedes cancelarla."
+        markup = InlineKeyboardMarkup(row_width = 2)
+        botones = []
+        botones.append(InlineKeyboardButton("✅ Pedir", callback_data=f'C|{url}'))
+        botones.append(InlineKeyboardButton("❌ Cerrar", callback_data="cerrar"))
+        markup.add(*botones)
+        bot.send_message(chatId, textConfirmation, reply_markup=markup, disable_web_page_preview=True, parse_mode="html")
+    else:
+        add_peticion_with_messages(chatId, name, url)
 
 def display_page(lista, chatId, pag=0, messageId=None):
     """Crea o edita un mensaje de la página"""
@@ -669,9 +718,8 @@ def get_user_search(chatId, messageId):
 def delete_user_search(chatId, messageId):
     executeQuery('DELETE FROM cache WHERE clave = %s', (f'{chatId}_{messageId}',), do_commit=True)
 
-def add_peticion_with_messages(chatId, messageId, name, url):
+def add_peticion_with_messages(chatId, name, url):
     linkTelegram = url_to_telegram_link(url)
-    bot.delete_message(chatId, messageId) # borramos el mensaje de la petición
     previsualizeImage = f'<a href="{read_cache_item_image(url)}"> </a>'
     try:
         add_peticion(chatId, url)
@@ -735,6 +783,10 @@ def is_peticion_deletable(peticion):
     # Las peticiones que están marcadas para borrar comienzan con D|
     return peticion.startswith('D|')
 
+def is_peticion_confirmed(peticion):
+    # Las peticiones que están confirmadas por el usuario comienzan con C|
+    return peticion.startswith('C|')
+
 def is_admin(chatId):
     return chatId == TELEGRAM_ADMIN
 
@@ -791,19 +843,10 @@ def create_tables_default():
 
     # Verifica si las tablas ya existen
     usuarios_exists = executeQuery("SHOW TABLES LIKE 'usuarios'")
-    print(f'TABLE usuarios existe: {usuarios_exists}')
-
     peticiones_exists = executeQuery("SHOW TABLES LIKE 'peticiones'")
-    print(f'TABLE peticiones existe: {peticiones_exists}')
-
     cache_exists = executeQuery("SHOW TABLES LIKE 'cache'")
-    print(f'TABLE cache existe: {cache_exists}')
-
     status_exist = executeQuery("SHOW TABLES LIKE 'status'")
-    print(f'TABLE status existe: {status_exist}')
-
     webpage_exist = executeQuery("SHOW TABLES LIKE 'webpage'")
-    print(f'TABLE webpage existe: {webpage_exist}')
     
     # Si las tablas no existen, créalas
     if not usuarios_exists:
@@ -868,7 +911,6 @@ def create_tables_default():
     print("Tablas correctas")
 
 def conectar():
-    print("Conectando a BBDD")
     HOST, PORT = DATABASE_HOST.split(":")
     return mysql.connector.connect(
         host=HOST,
@@ -943,6 +985,7 @@ if __name__ == '__main__':
         telebot.types.BotCommand("/ban",   "<ADMIN> Utilidad para banear usuarios"),
         telebot.types.BotCommand("/unban", "<ADMIN> Utilidad para desbanear usuarios"),
         telebot.types.BotCommand("/send",  "<ADMIN> Utilidad para escribir a todos los usuarios"),
-        telebot.types.BotCommand("/sendtouser", "<ADMIN> Utilidad para escribir a un usuario")
+        telebot.types.BotCommand("/sendtouser", "<ADMIN> Utilidad para escribir a un usuario"),
+        telebot.types.BotCommand("/version", "Consulta la versión actual del programa")
         ])
     bot.infinity_polling() # Arranca la detección de nuevos comandos 
