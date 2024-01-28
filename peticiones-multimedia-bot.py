@@ -5,13 +5,14 @@ import mysql.connector
 from telebot.types import InlineKeyboardMarkup
 from telebot.types import InlineKeyboardButton
 from plexapi.server import PlexServer
+from datetime import datetime
 import time
 import requests
 import json
 import re
 import sys
 
-VERSION = "4.0.0"
+VERSION = "4.1.0"
 
 # Comprobación inicial de variables
 if "abc" == TELEGRAM_TOKEN:
@@ -92,6 +93,7 @@ BASIC_CONFIG = {
     'EDIT_TIME': 3,
 }
 STATUS = {
+    'NUEVA': -1,
     'PENDIENTE': 0,
     'COMPLETADA': 1,
     'DENEGADA': 2,
@@ -101,6 +103,192 @@ WEBPAGE = {
     'IMDB': 1,
 }
 
+
+class User:
+    def __init__(self, chatId=None, username=None, name=None, allowed=None):
+        self.chatId=chatId
+        self.username=username
+        self.name=name
+        self.allowed=allowed
+    
+    def ban(self):
+        executeQuery('UPDATE usuarios SET allowed = false WHERE chat_id = %s', (self.chatId,), do_commit=True)
+
+    def unban(self):
+        executeQuery('UPDATE usuarios SET allowed = true WHERE chat_id = %s', (self.chatId,), do_commit=True)
+
+    def load(self, chatId=None):
+        if chatId == None:
+            chatId = self.chatId
+        result = executeQuery('SELECT chat_id, username, name, allowed FROM usuarios WHERE chat_id = %s', (chatId,))
+        if not result:
+            debug(f"El usuario {chatId} no se encuentra registrado entre los usuarios.")
+            return
+        self.chatId, self.username, self.name, self.allowed = result[0]
+
+    def load_by_username(self, username=None):
+        if username == None:
+            username = self.username
+        result = executeQuery('SELECT chat_id, username, name, allowed FROM usuarios WHERE username = %s', (username,))
+        if not result:
+            debug(f"El usuario {username} no se encuentra registrado entre los usuarios.")
+            return
+        self.chatId, self.username, self.name, self.allowed = result[0]
+
+    def update(self):
+        query = """
+            INSERT INTO usuarios (chat_id, name, username)
+            VALUES (%s, %s, %s)
+            ON DUPLICATE KEY UPDATE name = %s, username = %s
+        """
+        result = executeQuery(query, (self.chatId, self.name, self.username, self.name, self.username), do_commit=True)
+        if result == 1:
+            send_message_to_admin(f"Un nuevo usuario ha utilizado el bot: {self.get_telegram_link()}")
+        self.load()
+
+    def is_admin(self):
+        return self.chatId == TELEGRAM_ADMIN
+    
+    def get_telegram_link(self):
+        return f'<a href="tg://user?id={self.chatId}">{self.name}</a>'
+    
+    def send_message(self, message, parse_mode="html", disable_web_page_preview=False, reply_markup=None):
+        return bot.send_message(self.chatId, message, reply_markup=reply_markup, parse_mode=parse_mode, disable_web_page_preview=disable_web_page_preview)
+    
+class Media:
+    def __init__(self, filmCode=None, title=None, genre=None, rating=None, year=None, webpage=None, image=None):
+        self.filmCode=filmCode
+        self.title=title
+        self.genre=genre
+        self.rating=rating
+        self.year=year
+        self.webpage=webpage
+        self.image=image
+
+    def get_url(self):
+        if self.webpage == WEBPAGE['FILMAFFINITY']:
+            return f'https://www.filmaffinity.com/es/film{self.filmCode}.html'
+        else:
+            return f'https://www.imdb.com/title/tt{self.filmCode}/'
+
+    def get_telegram_link(self):
+        telegram_link = f'<a href="{self.get_url()}">{self.title} ({self.year})'
+        if self.rating != "--":
+            telegram_link += f' ({self.rating}★)'
+        telegram_link += '</a>'
+        return telegram_link
+    
+    def get_image_previsualize(self):
+        return f'<a href="{self.image}"> </a>'
+    
+    def load(self):
+        self.title = read_cache_item(self.filmCode, "title")
+        self.genre = read_cache_item(self.filmCode, "genre")
+        self.rating = read_cache_item(self.filmCode, "rating")
+        self.year = read_cache_item(self.filmCode, "year")
+        self.image = read_cache_item(self.filmCode, "image")
+        if not self.title or not self.genre or not self.rating or not self.year or not self.image:
+            specificUrl = None
+            if self.webpage == WEBPAGE['FILMAFFINITY']:
+                specificUrl = f'{URL_BASE_API_FILMAFFINITY}/film?url="{self.get_url()}"'
+            else:
+                specificUrl = f'{URL_BASE_API_IMDB}/film?url="{self.get_url()}"'
+            specificData = requests.get(specificUrl).json()
+            self.title = specificData['title']
+            self.genre = specificData['genre']
+            self.rating = specificData['rating']
+            self.year = specificData['year']
+            self.image = specificData['image']
+            write_cache_item(self.filmCode, "title", self.title)
+            write_cache_item(self.filmCode, "genre", self.genre)
+            write_cache_item(self.filmCode, "rating", self.rating)
+            write_cache_item(self.filmCode, "year", self.year)
+            write_cache_item(self.filmCode, "image", self.image)
+            write_cache_item(self.filmCode, "webpage", self.webpage)
+
+class Peticion:
+    def __init__(self, id=0, user=None, media=None, status=-1):
+        self.id=id
+        self.user=user
+        self.media=media
+        self.status=status
+
+    def add(self):
+        self.check_if_exist()
+        update = self.status == STATUS['DENEGADA']
+        if not update:
+            executeQuery('INSERT INTO peticiones (chat_id, film_code, webpage_id, status_id) VALUES (%s, %s, %s, %s)', (self.user.chatId, self.media.filmCode, self.media.webpage, STATUS['PENDIENTE']), do_commit=True)
+        else:
+            executeQuery('UPDATE peticiones SET status_id = %s WHERE id = %s', (STATUS['PENDIENTE'], self.id), do_commit=True)
+
+    def add_with_messages(self):
+        try:
+            self.add()
+            self.user.send_message(f'{self.media.get_image_previsualize()}{self.user.name}, has solicitado con éxito:\n{self.media.get_telegram_link()}\nNotificado al administrador ✅')
+            send_message_to_admin(f'{self.media.get_image_previsualize()}Nueva petición de {self.user.get_telegram_link()}:\n{self.media.get_telegram_link()}')
+        except PeticionExiste as e:
+            self.user.send_message(f'❌ {self.media.get_image_previsualize()}{self.user.name}, la petición: {self.media.get_telegram_link()} ya se encuentra añadida y está en estado {e.status}.')
+
+    def completar(self):
+        executeQuery('UPDATE peticiones SET status_id = %s WHERE id = %s', (STATUS['COMPLETADA'], self.id), do_commit=True)
+
+    def borrar(self):
+        executeQuery('UPDATE peticiones SET status_id = %s WHERE id = %s', (STATUS['DENEGADA'], self.id), do_commit=True)
+
+    def load_from_filmCode(self, filmCode):
+        query = """
+                    SELECT p.id, p.film_code, p.webpage_id, p.status_id, u.name, u.username, u.chat_id, u.allowed
+                    FROM peticiones p
+                    JOIN usuarios u ON p.chat_id = u.chat_id
+                    WHERE p.film_code = %s;
+            """
+        if isinstance(filmCode, str):
+            filmCode = (filmCode,)
+        resultado = executeQuery(query, filmCode)[0]
+        user = User(chatId=resultado[6], username=resultado[5], name=resultado[4], allowed=resultado[7])
+        media = Media(filmCode=resultado[1], webpage=resultado[2])
+        media.load()
+        self.user = user
+        self.media = media
+        self.id = resultado[0]
+        self.status = resultado[3]
+
+    def add_with_messages_and_plex(self):
+        search_results = plex.search(re.sub(r'\([^)]*\)', '', self.media.title))
+        debug(f'Búsqueda en Plex: "{self.media.title}" - RESULTADOS: {search_results}')
+        if search_results:
+            textConfirmation = f"🔎 Se ha encontrado contenido en <b>{SERVER_NAME}</b> que podría coincidir con tu solicitud.\n\n"
+            textConfirmation += f"Has querido solicitar: {self.media.get_telegram_link()}\n\n"
+            textConfirmation += f"En <b>{SERVER_NAME}</b> se ha encontrado:\n\n"
+            contador = 0
+            for item in search_results:
+                if item.type in ("movie", "show"):
+                    textConfirmation += f" · {item.title} ({item.year})\n"
+                    contador += 1
+            if contador == 0:
+                self.add_with_messages()
+                return
+            textConfirmation += "\nSi lo que quieres pedir no se encuentra entre los resultados, puedes confirmar la petición. En caso contrario puedes cancelarla."
+            markup = InlineKeyboardMarkup(row_width = 2)
+            botones = []
+            botones.append(InlineKeyboardButton("✅ Pedir", callback_data=f'C|{self.media.get_url()}'))
+            botones.append(InlineKeyboardButton("❌ Cancelar", callback_data="cerrar"))
+            markup.add(*botones)
+            self.user.send_message(textConfirmation, reply_markup=markup, disable_web_page_preview=True)
+        else:
+            self.add_with_messages()
+    
+    def check_if_exist(self):
+        query = """
+                    SELECT id, status_id
+                    FROM peticiones
+                    WHERE film_code = %s;
+            """
+        resultados = executeQuery(query, (self.media.filmCode,))
+        for resultado in resultados:
+            id, status = resultado
+            if self.id != id and status != STATUS['DENEGADA']:
+                raise PeticionExiste(code=status, status=next((estado.lower() for estado, numero in STATUS.items() if numero == status), None))
 
 # =======================================================================
 # =======================================================================
@@ -115,21 +303,22 @@ WEBPAGE = {
 # =======================================================================
 
 # Respondemos a los comandos /XXXX
-@bot.message_handler(commands=["start", "list", "busca", "ban", "unban", "send", "sendtouser", "version"])
+@bot.message_handler(commands=["start", "list", "busca", "ban", "unban", "sendtoall", "sendtouser", "version"])
 def command_controller(message):
     chatId = message.chat.id
     comando = message.text.split()[0]
-    update_user(message)
-    if not is_user_allowed(chatId):
-        bot.send_message(chatId, "Lamentablemente, <b>has sido baneado del bot.</b>", parse_mode="html")
+    user = User(chatId=message.from_user.id, username=message.from_user.username, name=message.from_user.first_name)
+    user.update()
+    if not user.allowed:
+        user.send_message("❌ Lamentablemente, <b>has sido baneado del bot.</b>")
         return
     
-    if not message.from_user.username:
-        bot.send_message(chatId, f"⚠️ Por favor {message.from_user.first_name}, para un correcto funcionamiento del bot, *es necesario que te establezcas un nombre de usuario*.\n\nSe establece en Telegram->Ajustes->Editar->Nombre de usuario.", parse_mode="markdown")
+    if not user.username:
+        user.send_message(f"⚠️ Por favor {user.name}, para un correcto funcionamiento del bot, <b>es necesario que te establezcas un nombre de usuario</b>.\n\nSe establece en Telegram->Ajustes->Editar->Nombre de usuario.")
 
     if comando in ('/start'):
         texto_inicial = ""
-        if not is_admin(chatId):
+        if not user.is_admin():
             """Da la bienvenida al usuario"""
             texto_inicial = f'🎥 Bienvenido al bot de peticiones *{SERVER_NAME}* querido usuario.\n\n'
             texto_inicial += f'A continuación puedes compartir enlaces de [FilmAffinity](https://www.filmaffinity.com/es/main.html) ó [IMDb](https://www.imdb.com) para que se añadan a {SERVER_NAME}\n\n'
@@ -144,14 +333,14 @@ def command_controller(message):
             texto_inicial += f' · /list Lista las peticiones pendientes de completar.\n'
             texto_inicial += f' · /ban <usuario> banea a un usuario.\n'
             texto_inicial += f' · /unban <usuario> desbanea a un usuario.\n'
-            texto_inicial += f' · /send Envía un mensaje a todos los usuarios no baneados.\n'
+            texto_inicial += f' · /sendtoall Envía un mensaje a todos los usuarios no baneados.\n'
             texto_inicial += f' · /sendtouser <usuario> envía un mensaje al usuario descrito.\n'
             texto_inicial += f' · /version Muestra la versión actual.\n'
-        bot.send_message(chatId, texto_inicial, parse_mode="markdown", disable_web_page_preview=True)
+        user.send_message(texto_inicial, parse_mode="markdown", disable_web_page_preview=True)
        
     elif comando in ('/busca'):
-        if is_admin(chatId):
-            x = bot.send_message(chatId, "❌ Esta función está dedicada para los usuarios, <b>no para el administrador.</b>", parse_mode="html")
+        if user.is_admin():
+            x = user.send_message("❌ Esta función está dedicada para los usuarios, <b>no para el administrador.</b>")
             time.sleep(BASIC_CONFIG['DELETE_TIME'])
             bot.delete_message(chatId, message.message_id)
             bot.delete_message(chatId, x.message_id)
@@ -163,7 +352,7 @@ def command_controller(message):
                 texto += 'Ejemplo:\n'
                 texto += f'<code>{message.text} Gladiator</code>\n\n'
                 texto += '<b>Importante</b>: No incluyas el año en la búsqueda'
-                bot.send_message(chatId, texto, parse_mode="html")
+                user.send_message(texto)
                 return 1
 
             if is_search_engine_filmaffinity():
@@ -171,87 +360,70 @@ def command_controller(message):
             else:
                 elements = imdb_search(textoBuscar)
             if not elements:
-                bot.send_message(chatId, "❌ Lamentablemente, <b>no se han encontrado</b> resultados para el texto introducido\nRecuerda que <b>no debes</b> introducir el año en el texto de búsqueda", parse_mode="html")
+                user.send_message("❌ Lamentablemente, <b>no se han encontrado</b> resultados para el texto introducido\nRecuerda que <b>no debes</b> introducir el año en el texto de búsqueda")
             else:
                 display_page(elements, chatId)
     
     elif comando in ('/list'):
         """Comando lista"""
         bot.delete_message(chatId, message.message_id)
-        if is_admin(chatId):
+        if user.is_admin():
             markup = InlineKeyboardMarkup(row_width = 3)
             textoMensaje = "📃 <b>Completa</b> o <b>descarta</b> peticiones:\n"
             contador = 1
             botones = []
+            peticiones = get_all_pending_peticiones()
 
-            query = """
-                    SELECT p.film_code, p.webpage_id, u.name, u.chat_id
-                    FROM peticiones p
-                    JOIN usuarios u ON p.chat_id = u.chat_id
-                    WHERE p.status_id = %s;
-            """
-
-            resultados = executeQuery(query, (STATUS['PENDIENTE'],))
-
-            if len(resultados) == 0:
-                x = bot.send_message(chatId, "<b>No</b> hay peticiones pendientes ✅", parse_mode="html")
+            if len(peticiones) == 0:
+                x = user.send_message("<b>No</b> hay peticiones pendientes ✅")
                 time.sleep(BASIC_CONFIG['DELETE_TIME'])
                 bot.delete_message(chatId, x.message_id)
                 return
 
             # Iterar sobre los resultados e imprimir la información
-            for resultado in resultados:
-                film_code, webpage, name, userId = resultado
-                url = film_code_to_url(film_code, webpage)
-                telegram_link = url_to_telegram_link(url)
-                name = telegram_name_with_link(userId, name)
+            for peticion in peticiones:
+                url = peticion.media.get_url()
+                telegram_link = peticion.media.get_telegram_link()
+                name = peticion.user.get_telegram_link()
                 textoMensaje += f'<b>[{str(contador)}]</b> {name} : {telegram_link} \n'
-                botones.append(InlineKeyboardButton(f'{str(contador)}: {extract_filmname_from_telegram_link(telegram_link)}', url=url))
+                botones.append(InlineKeyboardButton(f'{str(contador)}: {peticion.media.title}', url=url))
                 botones.append(InlineKeyboardButton("✅", callback_data=url))
                 botones.append(InlineKeyboardButton("🗑️", callback_data=f'D|{url}'))
                 contador += 1
 
             markup.add(*botones)
             markup.add(InlineKeyboardButton("❌ - Cerrar", callback_data="cerrar"))
-            bot.send_message(chatId, textoMensaje, reply_markup=markup, disable_web_page_preview=True, parse_mode="html")
+            user.send_message(textoMensaje, reply_markup=markup, disable_web_page_preview=True)
         else:
             markup = InlineKeyboardMarkup(row_width = 2)
             textoMensaje = "<b>Descarta</b> tus peticiones haciendo clic la 🗑️.\n\nSi no quieres eliminar ninguna pulsa en <code>Cerrar</code>.\n"
             contador = 1
             botones = []
 
-            query = """
-                    SELECT p.film_code, p.webpage_id, u.name, u.chat_id
-                    FROM peticiones p
-                    JOIN usuarios u ON p.chat_id = u.chat_id
-                    WHERE p.status_id = %s AND p.chat_id = %s;
-            """
+            peticiones = get_all_pending_peticiones_from_user(user)
 
-            resultados = executeQuery(query, (STATUS['PENDIENTE'], chatId))
-
-            if len(resultados) == 0:
-                x = bot.send_message(chatId, "<b>No</b> tienes peticiones pendientes ✅", parse_mode="html")
+            if len(peticiones) == 0:
+                x = user.send_message("<b>No</b> tienes peticiones pendientes ✅")
                 time.sleep(BASIC_CONFIG['DELETE_TIME'])
                 bot.delete_message(chatId, x.message_id)
                 return
 
             # Iterar sobre los resultados e imprimir la información
-            for resultado in resultados:
-                film_code, webpage, name, userId = resultado
-                url = film_code_to_url(film_code, webpage)
-                telegram_link = url_to_telegram_link(url)
-                name = telegram_name_with_link(userId, name)
-                botones.append(InlineKeyboardButton(f'{str(contador)}: {extract_filmname_from_telegram_link(telegram_link)}', url=url))
+            for peticion in peticiones:
+                url = peticion.media.get_url()
+                telegram_link = peticion.media.get_telegram_link()
+                name = peticion.user.get_telegram_link()
+                botones.append(InlineKeyboardButton(f'{str(contador)}: {peticion.media.title}', url=url))
                 botones.append(InlineKeyboardButton(f'🗑️', callback_data=f'D|{url}'))
                 contador += 1
 
             markup.add(*botones)
             markup.add(InlineKeyboardButton("❌ - Cerrar", callback_data="cerrar"))
-            bot.send_message(chatId, textoMensaje, reply_markup=markup, disable_web_page_preview=True, parse_mode="html")
+            user.send_message(textoMensaje, reply_markup=markup, disable_web_page_preview=True)
 
     elif comando in ('/ban', '/unban'):
         """Comando lista"""
-        if not is_admin(chatId):
+        if not user.is_admin():
             user_introduces_admin_command(message)
             return
         
@@ -260,22 +432,26 @@ def command_controller(message):
             # El usuario sólamente ha introducido /ban
             texto = '❌ Debes introducir el nombre de usuario con el @\n'
             texto += 'Ejemplo:\n'
-            texto += f'<code>{message.text} @periquito</code>\n\n'
-            bot.send_message(chatId, texto, parse_mode="html")
+            texto += f'<code>{comando} @periquito</code>\n\n'
+            user.send_message(texto)
             return 1
 
         try:
             if comando in ('/ban'):
-                ban_user(userToBanOrUnBan[1:])
-                bot.send_message(chatId, f"<b>El usuario {userToBanOrUnBan} ha sido baneado.</b>", parse_mode="html")
+                userToBan = User(username=userToBanOrUnBan[1:])
+                userToBan.load_by_username()
+                userToBan.ban()
+                user.send_message(f"⚠️ <b>El usuario {userToBanOrUnBan} ha sido baneado.</b>")
             else:
-                unban_user(userToBanOrUnBan[1:])
-                bot.send_message(chatId, f"<b>El usuario {userToBanOrUnBan} ha sido desbaneado.</b>", parse_mode="html")
+                userToUnban = User(username=userToBanOrUnBan[1:])
+                userToUnban.load_by_username()
+                userToUnban.unban()
+                user.send_message(f"⚠️ <b>El usuario {userToBanOrUnBan} ha sido desbaneado.</b>")
         except:
-            bot.send_message(chatId, f"<b>No se ha podido banear al usuario {userToBanOrUnBan}.</b>\nNo existe ningún usuario con ese nombre de usuario asociado.", parse_mode="html")
+            user.send_message(f"<b>No se ha podido banear al usuario {userToBanOrUnBan}.</b>\nNo existe ningún usuario con ese nombre de usuario asociado.")
 
-    elif comando in ('/send'):
-        if not is_admin(chatId):
+    elif comando in ('/sendtoall'):
+        if not user.is_admin():
             user_introduces_admin_command(message)
             return
 
@@ -286,32 +462,29 @@ def command_controller(message):
             texto += 'Ejemplo:\n'
             texto += f'<code>{comando} Hola a todos</code>\n\n'
             texto += '<b>Importante</b>: Este mensaje lo recibirán todos aquellos que hayan usado el bot y que no estén baneados.'
-            bot.send_message(chatId, texto, parse_mode="html")
+            user.send_message(texto)
             return 1
 
         users = get_all_active_users()
-        for user in users:
+        for userToSend in users:
             try:
-                if not is_admin(user[0]):
-                    bot.send_message(user[0], textoAEnviar, parse_mode="Markdown")
+                if not userToSend.is_admin():
+                    userToSend.send_message(textoAEnviar, "Markdown")
             except:
-                debug(f"El usuario {user[0]} no existe actualmente o ha bloqueado al bot")
-        bot.send_message(chatId, f'Se ha difundido el mensaje: {textoAEnviar}', parse_mode="Markdown")
+                debug(f"El usuario {userToSend.name} (@{userToSend.username}) no existe actualmente o ha bloqueado al bot")
+        user.send_message(f'Se ha difundido el mensaje: {textoAEnviar}', parse_mode="Markdown")
 
     elif comando in ('/sendtouser'):
-        if not is_admin(chatId):
+        if not user.is_admin():
             user_introduces_admin_command(message)
             return
 
         patron = r'/sendtouser @(\S+) (.+)'
         username = None
         textoAEnviar = None
-
-        # Buscar coincidencias en el texto
         coincidencia = re.match(patron, message.text)
 
         if coincidencia:
-            # El grupo 1 contiene el nombre de usuario, el grupo 2 contiene el mensaje
             username = coincidencia.group(1)
             textoAEnviar = coincidencia.group(2)
         else: 
@@ -320,28 +493,26 @@ def command_controller(message):
             texto += 'Ejemplo:\n'
             texto += f'<code>{comando} @periquito Hola a periquito</code>\n\n'
             texto += '<b>Importante</b>: Este mensaje lo recibirá el destinatario.'
-            bot.send_message(chatId, texto, parse_mode="html")
+            user.send_message(texto)
             return 1
 
-        query = """
-            SELECT chat_id
-            FROM usuarios
-            WHERE username = %s;
-        """
-        result = executeQuery(query, (username,))[0]
-        if not result:
+        userToSend = User(username=username)
+        userToSend.load_by_username()
+        if not userToSend.chatId:
+            user.send_message(f"El usuario {username} no se encuentra registrado entre los usuarios.")
             debug(f"El usuario {username} no se encuentra registrado entre los usuarios.")
             return
-        bot.send_message(result[0], textoAEnviar, parse_mode="Markdown")
-        bot.send_message(chatId, f'Se ha difundido el mensaje: {textoAEnviar}', parse_mode="Markdown")
+        else:
+            userToSend.send_message(textoAEnviar, "Markdown")
+        user.send_message(f'Se ha difundido el mensaje: {textoAEnviar}', parse_mode="Markdown")
     
     elif comando in ('/version'):
         bot.delete_message(chatId, message.id)
-        x = bot.send_message(chatId, f'⚙️ _Versión: {VERSION}_\nDesarrollado con ❤️ por @dgongut\n\nSi encuentras cualquier fallo o sugerencia contáctame.\n\nPuedes encontrar todo lo relacionado con este bot en [DockerHub](https://hub.docker.com/r/dgongut/peticiones-multimedia-bot) o en [GitHub](https://github.com/dgongut/peticiones-multimedia-bot)', parse_mode="markdown")
+        x = user.send_message(f'⚙️ _Versión: {VERSION}_\nDesarrollado con ❤️ por @dgongut\n\nSi encuentras cualquier fallo o sugerencia contáctame.\n\nPuedes encontrar todo lo relacionado con este bot en [DockerHub](https://hub.docker.com/r/dgongut/peticiones-multimedia-bot) o en [GitHub](https://github.com/dgongut/peticiones-multimedia-bot)', parse_mode="markdown")
         time.sleep(15)
         bot.delete_message(chatId, x.message_id)
 
-    elif not is_admin(chatId):
+    elif not user.is_admin():
         """Un usuario normal ha introducido un comando"""
         text_controller(message)
 
@@ -349,26 +520,26 @@ def command_controller(message):
 def text_controller(message):
     """Gestiona los mensajes de texto, por aqui entrara el texto que deberan ser exclusivamente peticiones mediante un enlace directo"""
     chatId = message.chat.id
-    name = telegram_name_with_link(chatId, message.from_user.first_name)
-    update_user(message)
-    if not is_user_allowed(chatId):
-        bot.send_message(chatId, "❌ Lamentablemente, <b>has sido baneado del bot.</b>", parse_mode="html")
+    user = User(chatId=message.from_user.id, username=message.from_user.username, name=message.from_user.first_name)
+    user.update()
+    if not user.allowed:
+        user.send_message("❌ Lamentablemente, <b>has sido baneado del bot.</b>")
         return
 
-    if not message.from_user.username:
-        bot.send_message(chatId, f"⚠️ Por favor {message.from_user.first_name}, para un correcto funcionamiento del bot, *es necesario que te establezcas un nombre de usuario*.\n\nSe establece en Telegram->Ajustes->Editar->Nombre de usuario.", parse_mode="markdown")
+    if not user.username:
+        user.send_message(f"⚠️ Por favor {user.get_telegram_link()}, para un correcto funcionamiento del bot, <b>es necesario que te establezcas un nombre de usuario</b>.\n\nSe establece en Telegram->Ajustes->Editar->Nombre de usuario.")
 
     if message.text.startswith("/"):
-        x = bot.send_message(chatId, "❌ Comando no permitido, se reportará al administrador")
-        bot.send_message(TELEGRAM_INTERNAL_CHAT, f'{name} ha enviado {message.text}', parse_mode="html")
+        x = user.send_message("❌ Comando no permitido, se reportará al administrador")
+        send_message_to_admin(f'{user.name} ha enviado {message.text}')
         time.sleep(BASIC_CONFIG['DELETE_TIME'])
         bot.delete_message(chatId, message.message_id)
         bot.delete_message(chatId, x.message_id)
     
     elif "filmaffinity.com" in message.text or "imdb.com" in message.text:
         bot.delete_message(chatId, message.message_id)
-        if is_admin(chatId):
-            x = bot.send_message(chatId, "❌ El administrador no puede realizar peticiones")
+        if user.is_admin():
+            x = user.send_message("❌ El administrador no puede realizar peticiones")
             time.sleep(BASIC_CONFIG['DELETE_TIME'])
             bot.delete_message(chatId, x.message_id)
             return
@@ -378,16 +549,23 @@ def text_controller(message):
 
         if enlace:
             enlaceEncontrado = enlace.group()
-            if not is_plex_linked():
-                add_peticion_with_messages(chatId, name, enlaceEncontrado)
+            if is_filmaffinity_link(enlaceEncontrado):
+                webpage = WEBPAGE['FILMAFFINITY']
             else:
-                plex_search_and_dispatch(chatId, name, enlaceEncontrado)
+                webpage = WEBPAGE['IMDB']
+            media = Media(filmCode=url_to_film_code(enlaceEncontrado), webpage=webpage)
+            media.load()
+            peticion = Peticion(user=user, media=media)
+            if not is_plex_linked():
+                peticion.add_with_messages()
+            else:
+                peticion.add_with_messages_and_plex()
         else:
-            bot.send_message(chatId, "❌ Enlace no válido.")
-            bot.send_message(TELEGRAM_INTERNAL_CHAT, f'{name} ha enviado {message.text}', parse_mode="html")
+            user.send_message("❌ Enlace no válido.")
+            send_message_to_admin(f'{user.get_telegram_link} ha enviado {message.text}')
         
     else:
-        x = bot.send_message(chatId, "❌ Este bot no es conversacional, el administrador <b>no recibirá</b> el mensaje si no va junto al enlace de Filmaffinity o IMDb\n\nProcedo a borrar los mensajes", parse_mode="html")
+        x = user.send_message("❌ Este bot no es conversacional, el administrador <b>no recibirá</b> el mensaje si no va junto al enlace de Filmaffinity o IMDb\n\nProcedo a borrar los mensajes", parse_mode="html")
         time.sleep(BASIC_CONFIG['DELETE_TIME'])
         bot.delete_message(chatId, message.message_id)
         bot.delete_message(chatId, x.message_id)
@@ -395,67 +573,61 @@ def text_controller(message):
 @bot.callback_query_handler(func=lambda mensaje: True)
 def button_controller(call):
     """Se ha pulsado un boton"""
-    chatId = call.from_user.id
     messageId = call.message.id
-    name = telegram_name_with_link(chatId, call.from_user.first_name)
+    user = User(chatId=call.from_user.id, username=call.from_user.username, name=call.from_user.first_name)
+    user.update()
 
     if call.data == "cerrar":
-        bot.delete_message(chatId, messageId)
-        delete_user_search(chatId, messageId)
+        bot.delete_message(user.chatId, messageId)
+        delete_user_search(user.chatId, messageId)
         return
 
     # Se ha pulsado en un boton de borrar una peticion
     if is_peticion_deletable(call.data):
         filmCode = url_to_film_code(call.data[2:])
-        result = get_data_from_peticion(filmCode)
-        firstName, userId = result
-        username = telegram_name_with_link(userId, firstName)
-        previsualizeImage = f'<a href="{read_cache_item_image(call.data[2:])}"> </a>'
-        if not is_admin(chatId) and not check_owner_peticion(chatId, filmCode): # El admin puede borrar cualquiera
-            bot.delete_message(chatId, messageId)
-            bot.send_message(chatId, f'{previsualizeImage}{name}, no tienes permiso para eliminar esa petición ❌', parse_mode="html")
-            bot.send_message(TELEGRAM_INTERNAL_CHAT, f'El usuario {name} ha intenado eliminar la petición {filmCode} ❌', parse_mode="html")
+        peticion = Peticion()
+        peticion.load_from_filmCode(filmCode=filmCode)
+        if not user.is_admin() and user.chatId != peticion.user.chatId: # El admin puede borrar cualquiera
+            bot.delete_message(user.chatId, messageId)
+            user.send_message(f'{peticion.media.get_image_previsualize()}{user.name}, no tienes permiso para eliminar esa petición ❌')
+            send_message_to_admin(f'El usuario {user.get_telegram_link()} ha intenado eliminar la petición {filmCode} ❌')
             return
         # Borramos la petición
         executeQuery('UPDATE peticiones SET status_id = %s WHERE film_code = %s', (STATUS['DENEGADA'], filmCode), do_commit=True)
-        bot.delete_message(chatId, messageId)
-        bot.send_message(chatId, f'{previsualizeImage}La petición de {username} ha sido <b>eliminada</b> ✅', parse_mode="html")
-        if not is_admin(chatId):
-            bot.send_message(TELEGRAM_INTERNAL_CHAT, f'{previsualizeImage}El usuario {name} ha eliminado su petición ❌', parse_mode="html")
+        bot.delete_message(user.chatId, messageId)
+        user.send_message(f'{peticion.media.get_image_previsualize()}La petición de {peticion.user.get_telegram_link()} ha sido <b>eliminada</b> ✅')
+        if not user.is_admin():
+            send_message_to_admin(f'{peticion.media.get_image_previsualize()}El usuario {user.get_telegram_link()} ha eliminado su petición ❌')
         else:
-            messageToUser = f"{previsualizeImage}{username}, tu petición: {url_to_telegram_link(call.data[2:])}\n\nHa sido finalmente <b>eliminada</b> por el administrador ❌"
-            bot.send_message(userId, messageToUser, parse_mode="html")
+            messageToUser = f"{peticion.media.get_image_previsualize()}{peticion.user.name}, tu petición: {peticion.media.get_telegram_link()}\n\nHa sido finalmente <b>eliminada</b> por el administrador ❌"
+            peticion.user.send_message(messageToUser)
 
     # Se ha pulsado un botón para completar una peticion
-    elif is_admin(chatId):
+    elif user.is_admin():
         # Marcamos petición como completada (call.data es una URL)
         filmCode = url_to_film_code(call.data)
-        result = get_data_from_peticion(filmCode)
-        firstName, userId = result
-        username = telegram_name_with_link(userId, firstName)
-
-        executeQuery('UPDATE peticiones SET status_id = %s WHERE film_code = %s', (STATUS['COMPLETADA'], filmCode), do_commit=True)
-
-        previsualizeImage = f'<a href="{read_cache_item_image(call.data)}"> </a>'
-        bot.delete_message(chatId, messageId)
-        bot.send_message(chatId, f'{previsualizeImage}La petición de {username} ha sido marcada como <b>completada</b> ✅', parse_mode="html")
-        messageToUser = f'{previsualizeImage}{username}, tu petición: {url_to_telegram_link(call.data)}\n\n<b>Ha sido completada</b> ✅\n\nTardará unos minutos en aparecer, siempre podrás consultarlo en <i>{NOMBRE_CANAL_NOVEDADES}</i>\nGracias.'
-        bot.send_message(userId, messageToUser, parse_mode="html")
+        peticion = Peticion()
+        peticion.load_from_filmCode(filmCode=filmCode)
+        peticion.completar()
+        bot.delete_message(user.chatId, messageId)
+        user.send_message(f'{peticion.media.get_image_previsualize()}La petición de {peticion.user.get_telegram_link()} ha sido marcada como <b>completada</b> ✅')
+        messageToUser = f'{peticion.media.get_image_previsualize()}{peticion.user.name}, tu petición: {peticion.media.get_telegram_link()}\n\n<b>Ha sido completada</b> ✅\n\nTardará un tiempo en estar disponible. Siempre podrás consultarlo en <i>{NOMBRE_CANAL_NOVEDADES}</i>\nGracias.'
+        peticion.user.send_message(messageToUser)
 
     # Dado que el administrador es el único que no puede usar el buscador, solo queda que sea un usuario con los botones de paginación
     else: 
         """Gestiona las pulsaciones de los botones de paginación"""
         # (call.data es una URL o una peticion confirmada empezando por C|
         if call.data in ("anterior", "siguiente"):
-            datos = get_user_search(chatId, messageId)
+            datos = get_user_search(user.chatId, messageId)
             if call.data == "anterior":
                 if datos["pag"] == 0:
                     bot.answer_callback_query(call.id, "Ya estás en la primera página")
                 
                 else:
                     datos["pag"] -= 1
-                    set_user_search(chatId, messageId, datos)
-                    display_page(datos["lista"], chatId, datos["pag"], messageId)
+                    set_user_search(user.chatId, messageId, datos)
+                    display_page(datos["lista"], user.chatId, datos["pag"], messageId)
                 return
             
             elif call.data == "siguiente":
@@ -464,20 +636,28 @@ def button_controller(call):
                 
                 else:
                     datos["pag"] += 1
-                    set_user_search(chatId, messageId, datos)
-                    display_page(datos["lista"], chatId, datos["pag"], messageId)
+                    set_user_search(user.chatId, messageId, datos)
+                    display_page(datos["lista"], user.chatId, datos["pag"], messageId)
                 return
         else:
-            delete_user_search(chatId, messageId)
-            bot.delete_message(chatId, messageId)
-            # Ha pulsado en un resultado para hacer la petición
-            if is_peticion_confirmed(call.data) or not is_plex_linked():
-                url = call.data
-                if is_peticion_confirmed(call.data):
-                    url = call.data[2:]
-                add_peticion_with_messages(chatId, name, url)
+            delete_user_search(user.chatId, messageId)
+            bot.delete_message(user.chatId, messageId)
+            url = call.data
+            is_already_confirmed = is_peticion_confirmed(call.data)
+            if is_already_confirmed:
+                url = call.data[2:]
+            filmCode = url_to_film_code(url=url)
+            if is_filmaffinity_link(url):
+                webpage = WEBPAGE['FILMAFFINITY']
+            else:
+                webpage = WEBPAGE['IMDB']
+            media = Media(filmCode=filmCode, webpage=webpage)
+            media.load()
+            peticion = Peticion(user=user, media=media)
+            if is_already_confirmed or not is_plex_linked():
+                peticion.add_with_messages()
             elif is_plex_linked():
-                plex_search_and_dispatch(chatId, name, call.data)
+                peticion.add_with_messages_and_plex()
 
 # ==============================================================
 # ==============================================================
@@ -490,31 +670,6 @@ def button_controller(call):
 #
 # ==============================================================
 # ==============================================================
-                
-def plex_search_and_dispatch(chatId, name, url):
-    filmName = extract_filmname_from_telegram_link(url_to_telegram_link(url))
-    search_results = plex.search(re.sub(r'\([^)]*\)', '', filmName))
-    print(f'Buscando por "{filmName}": {search_results}')
-    if search_results:
-        textConfirmation = f"🔎 Se ha encontrado contenido en <b>{SERVER_NAME}</b> que podría coincidir con tu solicitud.\n\n"
-        textConfirmation += f"Has querido solicitar: {url_to_telegram_link(url)}\n\n"
-        textConfirmation += f"En <b>{SERVER_NAME}</b> se ha encontrado:\n\n"
-        contador = 0
-        for item in search_results:
-            if item.type in ("movie", "show"):
-                textConfirmation += f" · {item.title} ({item.year})\n"
-                contador += 1
-        if contador == 0:
-            add_peticion_with_messages(chatId, name, url)
-        textConfirmation += "\nSi lo que quieres pedir no se encuentra entre los resultados, puedes confirmar la petición. En caso contrario puedes cancelarla."
-        markup = InlineKeyboardMarkup(row_width = 2)
-        botones = []
-        botones.append(InlineKeyboardButton("✅ Pedir", callback_data=f'C|{url}'))
-        botones.append(InlineKeyboardButton("❌ Cerrar", callback_data="cerrar"))
-        markup.add(*botones)
-        bot.send_message(chatId, textConfirmation, reply_markup=markup, disable_web_page_preview=True, parse_mode="html")
-    else:
-        add_peticion_with_messages(chatId, name, url)
 
 def display_page(lista, chatId, pag=0, messageId=None):
     """Crea o edita un mensaje de la página"""
@@ -568,9 +723,12 @@ def filmaffinity_search(searchText):
             if item['rating'] != "--":
                 title = f"{title} ({item['rating']}★)"
             url = item['url']
-            write_cache_item(title, url, item["id"])
-            write_cache_item_image(item['image'], item["id"])
             filmaffinityElements.append([title, url])
+            write_cache_item(item['id'], "title", item['title'])
+            write_cache_item(item['id'], "rating", item['rating'])
+            write_cache_item(item['id'], "year", item['year'])
+            write_cache_item(item['id'], "image", item['image'])
+            write_cache_item(item['id'], "webpage", WEBPAGE['FILMAFFINITY'])
 
     elif response.status_code == 404:
         return filmaffinityElements
@@ -596,8 +754,11 @@ def imdb_search(searchText):
         for item in data:
             url = item['url']
             title = f'{item["title"]} ({item["year"]})'
-            write_cache_item(title, url, item["id"])
             imdbElements.append([title, url])
+            write_cache_item(item['id'], "title", item['title'])
+            write_cache_item(item['id'], "year", item['year'])
+            write_cache_item(item['id'], "image", item['image'])
+            write_cache_item(item['id'], "webpage", WEBPAGE['IMDB'])
 
     elif response.status_code == 404:
         return imdbElements
@@ -607,32 +768,38 @@ def imdb_search(searchText):
     
     return imdbElements
 
-def url_to_telegram_link(url):
-    try:
-        return read_cache_item(url_to_film_code(url))
-    except:
-        specificUrl = None
-        if is_filmaffinity_link(url):
-            specificUrl = f'{URL_BASE_API_FILMAFFINITY}/film?url="{url}"'
-        else:
-            specificUrl = f'{URL_BASE_API_IMDB}/film?url="{url}"'
-        specificData = requests.get(specificUrl).json()
-        title = f"{specificData['title']} ({specificData['year']})"
-        if specificData['rating'] != "--":
-            title = f"{title} ({specificData['rating']}★)"
-        write_cache_item(title, url, specificData['id'])
-        write_cache_item_image(specificData['image'], specificData['id'])
-        return get_telegram_link(title, url)
-
-def get_data_from_peticion(filmCode):
+def get_all_pending_peticiones():
     query = """
-        SELECT u.name, u.chat_id
-        FROM peticiones p
-        JOIN usuarios u ON p.chat_id = u.chat_id
-        WHERE p.film_code = %s;
-    """
-    result = executeQuery(query, (filmCode,))[0]
-    return result
+                    SELECT film_code
+                    FROM peticiones
+                    WHERE status_id = %s;
+            """
+    peticiones = []
+    resultados = executeQuery(query, (STATUS['PENDIENTE'],))
+
+    for filmCode in resultados:
+        peticion = Peticion()
+        peticion.load_from_filmCode(filmCode)
+        peticiones.append(peticion)
+    
+    return peticiones
+
+def get_all_pending_peticiones_from_user(user):
+    query = """
+                    SELECT film_code
+                    FROM peticiones
+                    WHERE status_id = %s AND chat_id = %s;
+            """
+
+    resultados = executeQuery(query, (STATUS['PENDIENTE'], user.chatId))
+    peticiones = []
+
+    for filmCode in resultados:
+        peticion = Peticion()
+        peticion.load_from_filmCode(filmCode)
+        peticiones.append(peticion)
+    
+    return peticiones
 
 def url_to_film_code(url):
     numeroPelicula = None
@@ -649,59 +816,28 @@ def url_to_film_code(url):
     else:
         raise ValueError(f'No se encontró un número de película en el enlace: {url}')
 
-def film_code_to_url(filmCode, webpage):
-    if webpage == WEBPAGE['FILMAFFINITY']:
-        return f'https://www.filmaffinity.com/es/film{filmCode}.html'
-    else:
-        return f'https://www.imdb.com/title/tt{filmCode}/'
-
-def get_telegram_link(title, url):
-    return f'<a href="{url}">{title}</a>'
-
-def telegram_name_with_link(chatId, name):
-    return f'<a href="tg://user?id={chatId}">{name}</a>'
-
 def get_all_active_users():
-    return executeQuery('SELECT chat_id FROM usuarios WHERE allowed = 1')
+    users = []
+    results = executeQuery('SELECT chat_id, name, username, allowed FROM usuarios WHERE allowed = 1')
 
-def check_owner_peticion(chatId, filmCode):
-    result = executeQuery('SELECT COUNT(*) FROM peticiones WHERE chat_id = %s and film_code = %s', (chatId, filmCode))[0][0]
-    return True if result != 0 else False
+    for userFromDB in results:
+        user = User(chatId=userFromDB[0], name=userFromDB[1], username=userFromDB[2], allowed=userFromDB[3])
+        users.append(user)
+    return users
 
-def write_cache_item(title, url, filmCode):
+def write_cache_item(filmCode, property, valor):
     query = """
         INSERT INTO cache (clave, valor)
         VALUES (%s, %s)
         ON DUPLICATE KEY UPDATE valor = %s
     """
-    executeQuery(query, (filmCode, get_telegram_link(str(title).rstrip('\n'), str(url).rstrip('\n')), get_telegram_link(str(title).rstrip('\n'), str(url).rstrip('\n'))), do_commit=True)
+    executeQuery(query, (f'{filmCode}_{property}', valor, valor), do_commit=True)
 
-def read_cache_item(filmCode):
-    return executeQuery('SELECT valor FROM cache WHERE clave = %s', (filmCode,))[0][0]
-
-def write_cache_item_image(urlImage, filmCode):
-    query = """
-        INSERT INTO cache (clave, valor)
-        VALUES (%s, %s)
-        ON DUPLICATE KEY UPDATE valor = %s
-    """
-    executeQuery(query, (f'{filmCode}_img', urlImage, urlImage), do_commit=True)
-
-def read_cache_item_image(url):
+def read_cache_item(filmCode, property):
     try:
-        return executeQuery('SELECT valor FROM cache WHERE clave = %s', (f'{url_to_film_code(url)}_img',))[0][0]
+        return executeQuery('SELECT valor FROM cache WHERE clave = %s', (f'{filmCode}_{property}',))[0][0]
     except:
-        return generate_image_cache(url)
-
-def generate_image_cache(url):
-    specificUrl = None
-    if is_filmaffinity_link(url):
-        specificUrl = f'{URL_BASE_API_FILMAFFINITY}/film?url="{url}"'
-    else:
-        specificUrl = f'{URL_BASE_API_IMDB}/film?url="{url}"'
-    specificData = requests.get(specificUrl).json()
-    write_cache_item_image(specificData['image'], url_to_film_code(url))
-    return specificData['image']
+        return None
 
 def set_user_search(chatId, messageId, datos):
     query = """
@@ -718,62 +854,14 @@ def get_user_search(chatId, messageId):
 def delete_user_search(chatId, messageId):
     executeQuery('DELETE FROM cache WHERE clave = %s', (f'{chatId}_{messageId}',), do_commit=True)
 
-def add_peticion_with_messages(chatId, name, url):
-    linkTelegram = url_to_telegram_link(url)
-    previsualizeImage = f'<a href="{read_cache_item_image(url)}"> </a>'
-    try:
-        add_peticion(chatId, url)
-        bot.send_message(chatId, f'{previsualizeImage}{name}, has solicitado con éxito:\n{linkTelegram}\nNotificado al administrador ✅', parse_mode="html")
-        bot.send_message(TELEGRAM_INTERNAL_CHAT, f'{previsualizeImage}Nueva petición de {name}:\n{linkTelegram}', parse_mode="html")
-        time.sleep(BASIC_CONFIG['EDIT_TIME'])
-    except PeticionExiste as e:
-        bot.send_message(chatId, f'❌ {previsualizeImage}{name}, la petición: {url_to_telegram_link(url)} ya se encuentra añadida y está en estado {e.status}.', parse_mode="html")
+def debug(message):
+	print(f'{datetime.now().strftime("%Y-%m-%d %H:%M:%S")} - DEBUG: {message}')
 
-def add_peticion(chatId, url):
-    update = False
-    try:
-        check_if_exist_peticion(url)
-    except PeticionExiste as e:
-        if e.code == STATUS['DENEGADA']:
-            update = True
-        else:
-            raise e
-    if not update:
-        executeQuery('INSERT INTO peticiones (chat_id, film_code, webpage_id, status_id) VALUES (%s, %s, %s, %s)', (chatId, url_to_film_code(url), WEBPAGE['FILMAFFINITY'] if is_filmaffinity_link(url) else WEBPAGE['IMDB'], STATUS['PENDIENTE']), do_commit=True)
-    else:
-        executeQuery('UPDATE peticiones SET status_id = %s WHERE film_code = %s', (STATUS['PENDIENTE'], url_to_film_code(url)), do_commit=True)
+def error(message):
+	print(f'{datetime.now().strftime("%Y-%m-%d %H:%M:%S")} - ERROR: {message}')
 
-def update_user(call):
-    chatId = call.from_user.id
-    name = call.from_user.first_name
-    username = call.from_user.username
-    query = """
-        INSERT INTO usuarios (chat_id, name, username)
-        VALUES (%s, %s, %s)
-        ON DUPLICATE KEY UPDATE name = %s, username = %s
-    """
-    result = executeQuery(query, (chatId, name, username, name, username), do_commit=True)
-    if result == 1:
-        bot.send_message(TELEGRAM_INTERNAL_CHAT, f"Un nuevo usuario ha utilizado el bot: {telegram_name_with_link(chatId, name)}", parse_mode="html")
-
-def debug(message, html=False):
-    print(message)
-    if html:
-        bot.send_message(TELEGRAM_INTERNAL_CHAT, message, disable_web_page_preview=True, parse_mode="html")
-    else:
-        bot.send_message(TELEGRAM_INTERNAL_CHAT, message, disable_web_page_preview=True)
-
-def check_if_exist_peticion(url):
-    query = """
-        SELECT s.id, s.description
-        FROM peticiones p
-        INNER JOIN status s ON p.status_id = s.id
-        WHERE p.film_code = %s
-    """
-    result = executeQuery(query, (url_to_film_code(url),))
-    if result:
-        result = result[0]
-        raise PeticionExiste(result[0], result[1])
+def warning(message):
+	print(f'{datetime.now().strftime("%Y-%m-%d %H:%M:%S")} - ATENCION: {message}')
 
 def obtain_link_from_string(text):
     pattern = r"https?://[^\s]+"
@@ -787,14 +875,14 @@ def is_peticion_confirmed(peticion):
     # Las peticiones que están confirmadas por el usuario comienzan con C|
     return peticion.startswith('C|')
 
-def is_admin(chatId):
-    return chatId == TELEGRAM_ADMIN
-
 def is_search_engine_filmaffinity():
     return SEARCH_ENGINE == "filmaffinity"
 
 def is_filmaffinity_link(link):
     return "filmaffinity" in link
+
+def send_message_to_admin(message, parse_mode="html", disable_web_page_preview=False, reply_markup=None):
+    return bot.send_message(TELEGRAM_INTERNAL_CHAT, message, reply_markup=reply_markup, parse_mode=parse_mode, disable_web_page_preview=disable_web_page_preview)
 
 def user_introduces_admin_command(message):
     chatId = message.chat.id
@@ -802,23 +890,6 @@ def user_introduces_admin_command(message):
     x = bot.send_message(chatId, f'El comando {message.text} está reservado al administrador', parse_mode="html", disable_web_page_preview=True)
     time.sleep(BASIC_CONFIG['DELETE_TIME'])
     bot.delete_message(chatId, x.message_id)
-
-def extract_filmname_from_telegram_link(telegram_link):
-    result = re.search(r'>(.*?)</a>', telegram_link)
-    if result:
-        return result.group(1)
-    else:
-        return None
-
-def is_user_allowed(chatId):
-    result = executeQuery('SELECT allowed FROM usuarios WHERE chat_id = %s', (chatId,))[0][0]
-    return bool(result)
-
-def ban_user(username):
-    executeQuery('UPDATE usuarios SET allowed = false WHERE username = %s', (username,), do_commit=True)
-
-def unban_user(username):
-    executeQuery('UPDATE usuarios SET allowed = true WHERE username = %s', (username,), do_commit=True)
 
 class PeticionExiste(Exception):
     def __init__(self, code, status):
@@ -839,7 +910,7 @@ class PeticionExiste(Exception):
 # =================
 
 def create_tables_default():
-    print("Creando tablas si no existen")
+    debug("Creando tablas si no existen")
 
     # Verifica si las tablas ya existen
     usuarios_exists = executeQuery("SHOW TABLES LIKE 'usuarios'")
@@ -908,7 +979,7 @@ def create_tables_default():
                 FOREIGN KEY (webpage_id) REFERENCES webpage(id)
             )
         """, do_commit=True)
-    print("Tablas correctas")
+    debug("Tablas correctas")
 
 def conectar():
     HOST, PORT = DATABASE_HOST.split(":")
@@ -920,11 +991,11 @@ def conectar():
         database=DATABASE_NAME
     )
 
-def executeQuery(query, values=None, do_commit=False, debug=False):
+def executeQuery(query, values=None, do_commit=False, debugging=False):
     mydb = conectar()
     cursor = mydb.cursor()
 
-    if debug:
+    if debugging:
         if values is not None:
             debug(f'SQL Query: {query}')
             debug(f'SQL Values: {values}')
@@ -940,12 +1011,12 @@ def executeQuery(query, values=None, do_commit=False, debug=False):
         if query.strip().lower().startswith("select") or query.strip().lower().startswith("show"):
             # Devuelve los resultados solo si es una consulta SELECT o SHOW
             results = cursor.fetchall()
-            if debug:
+            if debugging:
                 debug(results)
         elif query.strip().lower().startswith("insert") or query.strip().lower().startswith("update"):
             # Devuelve el numero de resultados insertados/actualizados
             results = cursor.rowcount
-            if debug:
+            if debugging:
                 debug(results)
         else:
             results = None
@@ -975,7 +1046,7 @@ def executeQuery(query, values=None, do_commit=False, debug=False):
 
 # MAIN
 if __name__ == '__main__':
-    print(f'Iniciando Bot de peticiones en {SERVER_NAME}')
+    debug(f'Iniciando Bot de peticiones en {SERVER_NAME}')
     time.sleep(10) # Esperamos a la BBDD por si se está arrancando
     create_tables_default()
     bot.set_my_commands([ # Comandos a mostrar en el menú de Telegram
@@ -984,7 +1055,7 @@ if __name__ == '__main__':
         telebot.types.BotCommand("/list",  "Utilidad para completar o descartar peticiones"),
         telebot.types.BotCommand("/ban",   "<ADMIN> Utilidad para banear usuarios"),
         telebot.types.BotCommand("/unban", "<ADMIN> Utilidad para desbanear usuarios"),
-        telebot.types.BotCommand("/send",  "<ADMIN> Utilidad para escribir a todos los usuarios"),
+        telebot.types.BotCommand("/sendtoall",  "<ADMIN> Utilidad para escribir a todos los usuarios"),
         telebot.types.BotCommand("/sendtouser", "<ADMIN> Utilidad para escribir a un usuario"),
         telebot.types.BotCommand("/version", "Consulta la versión actual del programa")
         ])
