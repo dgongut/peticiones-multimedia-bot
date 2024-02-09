@@ -12,7 +12,7 @@ import json
 import re
 import sys
 
-VERSION = "4.1.0"
+VERSION = "4.2.0"
 
 # Comprobación inicial de variables
 if "abc" == TELEGRAM_TOKEN:
@@ -112,10 +112,14 @@ class User:
         self.allowed=allowed
     
     def ban(self):
-        executeQuery('UPDATE usuarios SET allowed = false WHERE chat_id = %s', (self.chatId,), do_commit=True)
+        if not self.is_admin():
+            executeQuery('UPDATE usuarios SET allowed = false WHERE chat_id = %s', (self.chatId,), do_commit=True)
+            self.send_message("<b>❌ Has sido deshabilitado por un administrador.</b>")
 
     def unban(self):
         executeQuery('UPDATE usuarios SET allowed = true WHERE chat_id = %s', (self.chatId,), do_commit=True)
+        if not self.is_admin():
+            self.send_message("<b>✅ Has sido habilitado por un administrador.</b>")
 
     def load(self, chatId=None):
         if chatId == None:
@@ -143,7 +147,17 @@ class User:
         """
         result = executeQuery(query, (self.chatId, self.name, self.username, self.name, self.username), do_commit=True)
         if result == 1:
-            send_message_to_admin(f"Un nuevo usuario ha utilizado el bot: {self.get_telegram_link()}")
+            self.load()
+            debug(f"Usuario nuevo {self.name}. Habilitado: {self.allowed}. Es admin: {self.is_admin()}")
+            if self.is_admin() and self.allowed == 0:
+                self.unban()
+            else:
+                if not self.allowed:
+                    markup = InlineKeyboardMarkup(row_width = 1)
+                    markup.add(InlineKeyboardButton("✅ Desbloquear usuario", callback_data=f'unban|{self.chatId}'))
+                else:
+                    markup = None
+                send_message_to_admin(f"Un nuevo usuario ha utilizado el bot: {self.get_telegram_link()}", reply_markup=markup)
         self.load()
 
     def is_admin(self):
@@ -309,10 +323,6 @@ def command_controller(message):
     comando = message.text.split()[0]
     user = User(chatId=message.from_user.id, username=message.from_user.username, name=message.from_user.first_name)
     user.update()
-    if not user.allowed:
-        user.send_message("❌ Lamentablemente, <b>has sido baneado del bot.</b>")
-        return
-    
     if not user.username:
         user.send_message(f"⚠️ Por favor {user.name}, para un correcto funcionamiento del bot, <b>es necesario que te establezcas un nombre de usuario</b>.\n\nSe establece en Telegram->Ajustes->Editar->Nombre de usuario.")
 
@@ -326,19 +336,26 @@ def command_controller(message):
             texto_inicial += f' · /list Lista tus peticiones pendientes de completar.\n'
             texto_inicial += f' · /busca <Pelicula/Serie> buscará en {SEARCH_ENGINE}.\n'
             texto_inicial += f' · /version Muestra la versión actual.\n'
+            if not user.allowed:
+                texto_inicial += "\n❌ Lamentablemente, *tu usuario se encuentra deshabilitado por el momento. Contacta con un administrador para que lo habilite.*"
         else:
             """Da la bienvenida al Administrador"""
             texto_inicial = f'🎥 Bienvenido al bot de peticiones *{SERVER_NAME}* querido administrador.\n\n'
             texto_inicial += f'➡️ Comandos disponibles:\n\n'
             texto_inicial += f' · /list Lista las peticiones pendientes de completar.\n'
-            texto_inicial += f' · /ban <usuario> banea a un usuario.\n'
-            texto_inicial += f' · /unban <usuario> desbanea a un usuario.\n'
-            texto_inicial += f' · /sendtoall Envía un mensaje a todos los usuarios no baneados.\n'
+            texto_inicial += f' · /ban <usuario> deshabilita a un usuario.\n'
+            texto_inicial += f' · /unban <usuario> habilita a un usuario.\n'
+            texto_inicial += f' · /sendtoall Envía un mensaje a todos los usuarios habilitados.\n'
             texto_inicial += f' · /sendtouser <usuario> envía un mensaje al usuario descrito.\n'
             texto_inicial += f' · /version Muestra la versión actual.\n'
         user.send_message(texto_inicial, parse_mode="markdown", disable_web_page_preview=True)
-       
-    elif comando in ('/busca'):
+        return
+    
+    if not user.allowed:
+        user.send_message("❌ Lamentablemente, <b>tu usuario se encuentra deshabilitado por el momento. Contacta con un administrador para que lo habilite.</b>")
+        return
+
+    if comando in ('/busca'):
         if user.is_admin():
             x = user.send_message("❌ Esta función está dedicada para los usuarios, <b>no para el administrador.</b>")
             time.sleep(BASIC_CONFIG['DELETE_TIME'])
@@ -441,14 +458,14 @@ def command_controller(message):
                 userToBan = User(username=userToBanOrUnBan[1:])
                 userToBan.load_by_username()
                 userToBan.ban()
-                user.send_message(f"⚠️ <b>El usuario {userToBanOrUnBan} ha sido baneado.</b>")
+                user.send_message(f"⚠️ <b>El usuario {userToBanOrUnBan} ha sido deshabilitado.</b>")
             else:
                 userToUnban = User(username=userToBanOrUnBan[1:])
                 userToUnban.load_by_username()
                 userToUnban.unban()
-                user.send_message(f"⚠️ <b>El usuario {userToBanOrUnBan} ha sido desbaneado.</b>")
+                user.send_message(f"⚠️ <b>El usuario {userToBanOrUnBan} ha sido habilitado.</b>")
         except:
-            user.send_message(f"<b>No se ha podido banear al usuario {userToBanOrUnBan}.</b>\nNo existe ningún usuario con ese nombre de usuario asociado.")
+            user.send_message(f"<b>No se ha podido deshabilitar el usuario {userToBanOrUnBan}.</b>\nNo existe ningún usuario con ese nombre de usuario asociado.")
 
     elif comando in ('/sendtoall'):
         if not user.is_admin():
@@ -461,7 +478,7 @@ def command_controller(message):
             texto = '❌ Debes introducir algo como mensaje\n'
             texto += 'Ejemplo:\n'
             texto += f'<code>{comando} Hola a todos</code>\n\n'
-            texto += '<b>Importante</b>: Este mensaje lo recibirán todos aquellos que hayan usado el bot y que no estén baneados.'
+            texto += '<b>Importante</b>: Este mensaje lo recibirán todos aquellos usuarios habilitados que hayan usado el bot.'
             user.send_message(texto)
             return 1
 
@@ -522,13 +539,13 @@ def text_controller(message):
     chatId = message.chat.id
     user = User(chatId=message.from_user.id, username=message.from_user.username, name=message.from_user.first_name)
     user.update()
-    if not user.allowed:
-        user.send_message("❌ Lamentablemente, <b>has sido baneado del bot.</b>")
-        return
-
     if not user.username:
         user.send_message(f"⚠️ Por favor {user.get_telegram_link()}, para un correcto funcionamiento del bot, <b>es necesario que te establezcas un nombre de usuario</b>.\n\nSe establece en Telegram->Ajustes->Editar->Nombre de usuario.")
 
+    if not user.allowed:
+        user.send_message("❌ Lamentablemente, <b>tu usuario se encuentra deshabilitado por el momento. Contacta con un administrador para que lo habilite.</b>")
+        return
+    
     if message.text.startswith("/"):
         x = user.send_message("❌ Comando no permitido, se reportará al administrador")
         send_message_to_admin(f'{user.name} ha enviado {message.text}')
@@ -581,6 +598,18 @@ def button_controller(call):
         bot.delete_message(user.chatId, messageId)
         delete_user_search(user.chatId, messageId)
         return
+    
+    if call.data.startswith('unban|'):
+        bot.delete_message(user.chatId, messageId)
+        if user.is_admin():
+            userToUnban = User(chatId=call.data.replace('unban|', ''))
+            userToUnban.load()
+            userToUnban.unban()
+            user.send_message(f"⚠️ <b>El usuario {userToUnban.name} ha sido habilitado.</b>")
+            return
+        else:
+            send_message_to_admin(f'El usuario {user.name} ha tratado de habilitar a un usuario. Esto no debería pasar.')
+            return
 
     # Se ha pulsado en un boton de borrar una peticion
     if is_peticion_deletable(call.data):
@@ -927,7 +956,7 @@ def create_tables_default():
                 chat_id BIGINT PRIMARY KEY,
                 name VARCHAR(255) NOT NULL,
                 username VARCHAR(255),
-                allowed BOOLEAN DEFAULT TRUE
+                allowed BOOLEAN DEFAULT FALSE
             )
         """, do_commit=True)
 
@@ -1053,8 +1082,8 @@ if __name__ == '__main__':
         telebot.types.BotCommand("/start", "Da la bienvenida"),
         telebot.types.BotCommand("/busca", f'Busca en {SEARCH_ENGINE}'),
         telebot.types.BotCommand("/list",  "Utilidad para completar o descartar peticiones"),
-        telebot.types.BotCommand("/ban",   "<ADMIN> Utilidad para banear usuarios"),
-        telebot.types.BotCommand("/unban", "<ADMIN> Utilidad para desbanear usuarios"),
+        telebot.types.BotCommand("/ban",   "<ADMIN> Utilidad para deshabilitar usuarios"),
+        telebot.types.BotCommand("/unban", "<ADMIN> Utilidad para habilitar usuarios"),
         telebot.types.BotCommand("/sendtoall",  "<ADMIN> Utilidad para escribir a todos los usuarios"),
         telebot.types.BotCommand("/sendtouser", "<ADMIN> Utilidad para escribir a un usuario"),
         telebot.types.BotCommand("/version", "Consulta la versión actual del programa")
