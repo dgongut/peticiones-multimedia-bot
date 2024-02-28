@@ -12,7 +12,7 @@ import json
 import re
 import sys
 
-VERSION = "4.2.0"
+VERSION = "4.3.0"
 
 # Comprobación inicial de variables
 if "abc" == TELEGRAM_TOKEN:
@@ -193,7 +193,7 @@ class Media:
         return telegram_link
     
     def get_image_previsualize(self):
-        return f'<a href="{self.image}"> </a>'
+        return f'<a href="{self.image}">🎥</a> '
     
     def load(self):
         self.title = read_cache_item(self.filmCode, "title")
@@ -228,18 +228,29 @@ class Peticion:
         self.status=status
 
     def add(self):
-        self.check_if_exist()
-        update = self.status == STATUS['DENEGADA']
+        update = False
+        try: 
+            self.check_if_exist()
+        except PeticionExiste as e:
+            if e.code != STATUS['DENEGADA']:
+                raise e
+            executeQuery('UPDATE peticiones SET status_id = %s, chat_id = %s WHERE id = %s', (STATUS['PENDIENTE'], self.user.chatId, e.id), do_commit=True)
+            update = True
         if not update:
             executeQuery('INSERT INTO peticiones (chat_id, film_code, webpage_id, status_id) VALUES (%s, %s, %s, %s)', (self.user.chatId, self.media.filmCode, self.media.webpage, STATUS['PENDIENTE']), do_commit=True)
-        else:
-            executeQuery('UPDATE peticiones SET status_id = %s WHERE id = %s', (STATUS['PENDIENTE'], self.id), do_commit=True)
 
     def add_with_messages(self):
         try:
             self.add()
             self.user.send_message(f'{self.media.get_image_previsualize()}{self.user.name}, has solicitado con éxito:\n{self.media.get_telegram_link()}\nNotificado al administrador ✅')
-            send_message_to_admin(f'{self.media.get_image_previsualize()}Nueva petición de {self.user.get_telegram_link()}:\n{self.media.get_telegram_link()}')
+            url = self.media.get_url()
+            markup = InlineKeyboardMarkup(row_width = 2)
+            botones = []
+            botones.append(InlineKeyboardButton("✅", callback_data=url))
+            botones.append(InlineKeyboardButton("🗑️", callback_data=f'D|{url}'))
+            markup.add(*botones)
+            x = send_message_to_admin(f'{self.media.get_image_previsualize()}Nueva petición de {self.user.get_telegram_link()}:\n{self.media.get_telegram_link()}', reply_markup=markup)
+            write_cache_item(self.media.filmCode, "notification", x.message_id)
         except PeticionExiste as e:
             self.user.send_message(f'❌ {self.media.get_image_previsualize()}{self.user.name}, la petición: {self.media.get_telegram_link()} ya se encuentra añadida y está en estado {e.status}.')
 
@@ -301,8 +312,7 @@ class Peticion:
         resultados = executeQuery(query, (self.media.filmCode,))
         for resultado in resultados:
             id, status = resultado
-            if self.id != id and status != STATUS['DENEGADA']:
-                raise PeticionExiste(code=status, status=next((estado.lower() for estado, numero in STATUS.items() if numero == status), None))
+            raise PeticionExiste(code=status, status=next((estado.lower() for estado, numero in STATUS.items() if numero == status), None), id=id)
 
 # =======================================================================
 # =======================================================================
@@ -621,9 +631,17 @@ def button_controller(call):
             user.send_message(f'{peticion.media.get_image_previsualize()}{user.name}, no tienes permiso para eliminar esa petición ❌')
             send_message_to_admin(f'El usuario {user.get_telegram_link()} ha intenado eliminar la petición {filmCode} ❌')
             return
-        # Borramos la petición
-        executeQuery('UPDATE peticiones SET status_id = %s WHERE film_code = %s', (STATUS['DENEGADA'], filmCode), do_commit=True)
-        bot.delete_message(user.chatId, messageId)
+        peticion.borrar()
+        notificationMessage = read_cache_item(peticion.media.filmCode, "notification")
+        if (notificationMessage and notificationMessage != messageId):
+            try:
+                bot.delete_message(TELEGRAM_INTERNAL_CHAT, notificationMessage)
+            except:
+                pass
+        try:
+            bot.delete_message(user.chatId, messageId)
+        except:
+            pass
         user.send_message(f'{peticion.media.get_image_previsualize()}La petición de {peticion.user.get_telegram_link()} ha sido <b>eliminada</b> ✅')
         if not user.is_admin():
             send_message_to_admin(f'{peticion.media.get_image_previsualize()}El usuario {user.get_telegram_link()} ha eliminado su petición ❌')
@@ -638,7 +656,16 @@ def button_controller(call):
         peticion = Peticion()
         peticion.load_from_filmCode(filmCode=filmCode)
         peticion.completar()
-        bot.delete_message(user.chatId, messageId)
+        notificationMessage = read_cache_item(peticion.media.filmCode, "notification")
+        if (notificationMessage and notificationMessage != messageId):
+            try:
+                bot.delete_message(TELEGRAM_INTERNAL_CHAT, notificationMessage)
+            except:
+                pass
+        try:
+            bot.delete_message(user.chatId, messageId)
+        except:
+            pass
         user.send_message(f'{peticion.media.get_image_previsualize()}La petición de {peticion.user.get_telegram_link()} ha sido marcada como <b>completada</b> ✅')
         messageToUser = f'{peticion.media.get_image_previsualize()}{peticion.user.name}, tu petición: {peticion.media.get_telegram_link()}\n\n<b>Ha sido completada</b> ✅\n\nTardará un tiempo en estar disponible. Siempre podrás consultarlo en <i>{NOMBRE_CANAL_NOVEDADES}</i>\nGracias.'
         peticion.user.send_message(messageToUser)
@@ -921,10 +948,11 @@ def user_introduces_admin_command(message):
     bot.delete_message(chatId, x.message_id)
 
 class PeticionExiste(Exception):
-    def __init__(self, code, status):
+    def __init__(self, code, status, id):
         super().__init__()
         self.status = status
         self.code = code
+        self.id = id
 
 # =================
 # =================
@@ -1088,4 +1116,6 @@ if __name__ == '__main__':
         telebot.types.BotCommand("/sendtouser", "<ADMIN> Utilidad para escribir a un usuario"),
         telebot.types.BotCommand("/version", "Consulta la versión actual del programa")
         ])
+    starting_message = f"🎥 *Peticiones Multimedia\n🟢 Activo*\n_⚙️ v{VERSION}_"
+    send_message_to_admin(message=starting_message, parse_mode="markdown")
     bot.infinity_polling() # Arranca la detección de nuevos comandos 
