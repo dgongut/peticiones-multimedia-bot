@@ -12,7 +12,7 @@ import json
 import re
 import sys
 
-VERSION = "4.3.1"
+VERSION = "4.3.2"
 
 # Comprobación inicial de variables
 if "abc" == TELEGRAM_TOKEN:
@@ -565,8 +565,10 @@ def text_controller(message):
         return
     
     if message.text.startswith("/"):
+        if user.is_admin():
+            return
         x = user.send_message("❌ Comando no permitido, se reportará al administrador")
-        send_message_to_admin(f'{user.name} ha enviado {message.text}')
+        send_message_to_admin(f'⚠️ <b>{user.name} ha enviado {message.text}</b>')
         time.sleep(BASIC_CONFIG['DELETE_TIME'])
         user.delete_message(message.message_id)
         user.delete_message(x.message_id)
