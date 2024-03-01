@@ -12,7 +12,7 @@ import json
 import re
 import sys
 
-VERSION = "4.3.0"
+VERSION = "4.3.1"
 
 # Comprobación inicial de variables
 if "abc" == TELEGRAM_TOKEN:
@@ -167,7 +167,15 @@ class User:
         return f'<a href="tg://user?id={self.chatId}">{self.name}</a>'
     
     def send_message(self, message, parse_mode="html", disable_web_page_preview=False, reply_markup=None):
+        if self.is_admin():
+            return send_message_to_admin(message, parse_mode=parse_mode, disable_web_page_preview=disable_web_page_preview, reply_markup=reply_markup)
         return bot.send_message(self.chatId, message, reply_markup=reply_markup, parse_mode=parse_mode, disable_web_page_preview=disable_web_page_preview)
+
+    def delete_message(self, messageId):
+        if self.is_admin():
+            bot.delete_message(TELEGRAM_INTERNAL_CHAT, messageId)
+            return
+        bot.delete_message(self.chatId, messageId)
     
 class Media:
     def __init__(self, filmCode=None, title=None, genre=None, rating=None, year=None, webpage=None, image=None):
@@ -336,7 +344,7 @@ def command_controller(message):
     if not user.username:
         user.send_message(f"⚠️ Por favor {user.name}, para un correcto funcionamiento del bot, <b>es necesario que te establezcas un nombre de usuario</b>.\n\nSe establece en Telegram->Ajustes->Editar->Nombre de usuario.")
 
-    if comando in ('/start'):
+    if comando in ('/start', f'/start@{bot.get_me().username}'):
         texto_inicial = ""
         if not user.is_admin():
             """Da la bienvenida al usuario"""
@@ -365,12 +373,12 @@ def command_controller(message):
         user.send_message("❌ Lamentablemente, <b>tu usuario se encuentra deshabilitado por el momento. Contacta con un administrador para que lo habilite.</b>")
         return
 
-    if comando in ('/busca'):
+    elif comando in ('/busca', f'/busca@{bot.get_me().username}'):
         if user.is_admin():
             x = user.send_message("❌ Esta función está dedicada para los usuarios, <b>no para el administrador.</b>")
             time.sleep(BASIC_CONFIG['DELETE_TIME'])
-            bot.delete_message(chatId, message.message_id)
-            bot.delete_message(chatId, x.message_id)
+            user.delete_message(message.message_id)
+            user.delete_message(x.message_id)
         else:
             textoBuscar = " ".join(message.text.split()[1:])
             if not textoBuscar: 
@@ -391,9 +399,9 @@ def command_controller(message):
             else:
                 display_page(elements, chatId)
     
-    elif comando in ('/list'):
+    elif comando in ('/list', f'/list@{bot.get_me().username}'):
         """Comando lista"""
-        bot.delete_message(chatId, message.message_id)
+        user.delete_message(message.message_id)
         if user.is_admin():
             markup = InlineKeyboardMarkup(row_width = 3)
             textoMensaje = "📃 <b>Completa</b> o <b>descarta</b> peticiones:\n"
@@ -404,7 +412,7 @@ def command_controller(message):
             if len(peticiones) == 0:
                 x = user.send_message("<b>No</b> hay peticiones pendientes ✅")
                 time.sleep(BASIC_CONFIG['DELETE_TIME'])
-                bot.delete_message(chatId, x.message_id)
+                user.delete_message(x.message_id)
                 return
 
             # Iterar sobre los resultados e imprimir la información
@@ -432,7 +440,7 @@ def command_controller(message):
             if len(peticiones) == 0:
                 x = user.send_message("<b>No</b> tienes peticiones pendientes ✅")
                 time.sleep(BASIC_CONFIG['DELETE_TIME'])
-                bot.delete_message(chatId, x.message_id)
+                user.delete_message(x.message_id)
                 return
 
             # Iterar sobre los resultados e imprimir la información
@@ -448,7 +456,7 @@ def command_controller(message):
             markup.add(InlineKeyboardButton("❌ - Cerrar", callback_data="cerrar"))
             user.send_message(textoMensaje, reply_markup=markup, disable_web_page_preview=True)
 
-    elif comando in ('/ban', '/unban'):
+    elif comando in ('/ban', f'/ban@{bot.get_me().username}', '/unban', f'/unban@{bot.get_me().username}'):
         """Comando lista"""
         if not user.is_admin():
             user_introduces_admin_command(message)
@@ -468,16 +476,16 @@ def command_controller(message):
                 userToBan = User(username=userToBanOrUnBan[1:])
                 userToBan.load_by_username()
                 userToBan.ban()
-                user.send_message(f"⚠️ <b>El usuario {userToBanOrUnBan} ha sido deshabilitado.</b>")
+                user.send_message(f"⚠️ <b>El usuario {userToBan.get_telegram_link()} ha sido deshabilitado.</b>")
             else:
                 userToUnban = User(username=userToBanOrUnBan[1:])
                 userToUnban.load_by_username()
                 userToUnban.unban()
-                user.send_message(f"⚠️ <b>El usuario {userToBanOrUnBan} ha sido habilitado.</b>")
+                user.send_message(f"⚠️ <b>El usuario {userToUnban.get_telegram_link()} ha sido habilitado.</b>")
         except:
             user.send_message(f"<b>No se ha podido deshabilitar el usuario {userToBanOrUnBan}.</b>\nNo existe ningún usuario con ese nombre de usuario asociado.")
 
-    elif comando in ('/sendtoall'):
+    elif comando in ('/sendtoall', f'/sendtoall@{bot.get_me().username}'):
         if not user.is_admin():
             user_introduces_admin_command(message)
             return
@@ -501,7 +509,7 @@ def command_controller(message):
                 debug(f"El usuario {userToSend.name} (@{userToSend.username}) no existe actualmente o ha bloqueado al bot")
         user.send_message(f'Se ha difundido el mensaje: {textoAEnviar}', parse_mode="Markdown")
 
-    elif comando in ('/sendtouser'):
+    elif comando in ('/sendtouser', f'/sendtouser@{bot.get_me().username}'):
         if not user.is_admin():
             user_introduces_admin_command(message)
             return
@@ -531,13 +539,13 @@ def command_controller(message):
             return
         else:
             userToSend.send_message(textoAEnviar, "Markdown")
-        user.send_message(f'Se ha difundido el mensaje: {textoAEnviar}', parse_mode="Markdown")
+        user.send_message(f'Se ha difundido el mensaje a {userToSend.name}: {textoAEnviar}', parse_mode="Markdown")
     
-    elif comando in ('/version'):
-        bot.delete_message(chatId, message.id)
+    elif comando in ('/version', f'/version@{bot.get_me().username}'):
+        user.delete_message(message.id)
         x = user.send_message(f'⚙️ _Versión: {VERSION}_\nDesarrollado con ❤️ por @dgongut\n\nSi encuentras cualquier fallo o sugerencia contáctame.\n\nPuedes encontrar todo lo relacionado con este bot en [DockerHub](https://hub.docker.com/r/dgongut/peticiones-multimedia-bot) o en [GitHub](https://github.com/dgongut/peticiones-multimedia-bot)', parse_mode="markdown")
         time.sleep(15)
-        bot.delete_message(chatId, x.message_id)
+        user.delete_message(x.message_id)
 
     elif not user.is_admin():
         """Un usuario normal ha introducido un comando"""
@@ -560,15 +568,15 @@ def text_controller(message):
         x = user.send_message("❌ Comando no permitido, se reportará al administrador")
         send_message_to_admin(f'{user.name} ha enviado {message.text}')
         time.sleep(BASIC_CONFIG['DELETE_TIME'])
-        bot.delete_message(chatId, message.message_id)
-        bot.delete_message(chatId, x.message_id)
+        user.delete_message(message.message_id)
+        user.delete_message(x.message_id)
     
     elif "filmaffinity.com" in message.text or "imdb.com" in message.text:
-        bot.delete_message(chatId, message.message_id)
+        user.delete_message(message.message_id)
         if user.is_admin():
             x = user.send_message("❌ El administrador no puede realizar peticiones")
             time.sleep(BASIC_CONFIG['DELETE_TIME'])
-            bot.delete_message(chatId, x.message_id)
+            user.delete_message(x.message_id)
             return
 
         # Buscar el primer enlace en el texto
@@ -594,8 +602,8 @@ def text_controller(message):
     else:
         x = user.send_message("❌ Este bot no es conversacional, el administrador <b>no recibirá</b> el mensaje si no va junto al enlace de Filmaffinity o IMDb\n\nProcedo a borrar los mensajes", parse_mode="html")
         time.sleep(BASIC_CONFIG['DELETE_TIME'])
-        bot.delete_message(chatId, message.message_id)
-        bot.delete_message(chatId, x.message_id)
+        user.delete_message(message.message_id)
+        user.delete_message(x.message_id)
 
 @bot.callback_query_handler(func=lambda mensaje: True)
 def button_controller(call):
@@ -605,20 +613,20 @@ def button_controller(call):
     user.update()
 
     if call.data == "cerrar":
-        bot.delete_message(user.chatId, messageId)
+        user.delete_message(messageId)
         delete_user_search(user.chatId, messageId)
         return
     
     if call.data.startswith('unban|'):
-        bot.delete_message(user.chatId, messageId)
+        user.delete_message(messageId)
         if user.is_admin():
             userToUnban = User(chatId=call.data.replace('unban|', ''))
             userToUnban.load()
             userToUnban.unban()
-            user.send_message(f"⚠️ <b>El usuario {userToUnban.name} ha sido habilitado.</b>")
+            user.send_message(f"⚠️ <b>El usuario {userToUnban.get_telegram_link()} ha sido habilitado.</b>")
             return
         else:
-            send_message_to_admin(f'El usuario {user.name} ha tratado de habilitar a un usuario. Esto no debería pasar.')
+            send_message_to_admin(f'El usuario {user.get_telegram_link()} ha tratado de habilitar a un usuario. Esto no debería pasar.')
             return
 
     # Se ha pulsado en un boton de borrar una peticion
@@ -627,7 +635,7 @@ def button_controller(call):
         peticion = Peticion()
         peticion.load_from_filmCode(filmCode=filmCode)
         if not user.is_admin() and user.chatId != peticion.user.chatId: # El admin puede borrar cualquiera
-            bot.delete_message(user.chatId, messageId)
+            user.delete_message(messageId)
             user.send_message(f'{peticion.media.get_image_previsualize()}{user.name}, no tienes permiso para eliminar esa petición ❌')
             send_message_to_admin(f'El usuario {user.get_telegram_link()} ha intenado eliminar la petición {filmCode} ❌')
             return
@@ -639,7 +647,7 @@ def button_controller(call):
             except:
                 pass
         try:
-            bot.delete_message(user.chatId, messageId)
+            user.delete_message(messageId)
         except:
             pass
         user.send_message(f'{peticion.media.get_image_previsualize()}La petición de {peticion.user.get_telegram_link()} ha sido <b>eliminada</b> ✅')
@@ -663,7 +671,7 @@ def button_controller(call):
             except:
                 pass
         try:
-            bot.delete_message(user.chatId, messageId)
+            user.delete_message(messageId)
         except:
             pass
         user.send_message(f'{peticion.media.get_image_previsualize()}La petición de {peticion.user.get_telegram_link()} ha sido marcada como <b>completada</b> ✅')
@@ -697,7 +705,7 @@ def button_controller(call):
                 return
         else:
             delete_user_search(user.chatId, messageId)
-            bot.delete_message(user.chatId, messageId)
+            user.delete_message(messageId)
             url = call.data
             is_already_confirmed = is_peticion_confirmed(call.data)
             if is_already_confirmed:
@@ -911,13 +919,13 @@ def delete_user_search(chatId, messageId):
     executeQuery('DELETE FROM cache WHERE clave = %s', (f'{chatId}_{messageId}',), do_commit=True)
 
 def debug(message):
-	print(f'{datetime.now().strftime("%Y-%m-%d %H:%M:%S")} - DEBUG: {message}')
+    print(f'{datetime.now().strftime("%Y-%m-%d %H:%M:%S")} - DEBUG: {message}')
 
 def error(message):
-	print(f'{datetime.now().strftime("%Y-%m-%d %H:%M:%S")} - ERROR: {message}')
+    print(f'{datetime.now().strftime("%Y-%m-%d %H:%M:%S")} - ERROR: {message}')
 
 def warning(message):
-	print(f'{datetime.now().strftime("%Y-%m-%d %H:%M:%S")} - ATENCION: {message}')
+    print(f'{datetime.now().strftime("%Y-%m-%d %H:%M:%S")} - ATENCION: {message}')
 
 def obtain_link_from_string(text):
     pattern = r"https?://[^\s]+"
