@@ -12,7 +12,7 @@ import json
 import re
 import sys
 
-VERSION = "4.4.0"
+VERSION = "4.4.1"
 
 # Comprobación inicial de variables
 if "abc" == TELEGRAM_TOKEN:
@@ -214,9 +214,9 @@ class Media:
         if not self.title or not self.genre or not self.rating or not self.year or not self.image or self.isSerie is None:
             specificUrl = None
             if self.webpage == WEBPAGE['FILMAFFINITY']:
-                specificUrl = f'{URL_BASE_API_FILMAFFINITY}/film?url="{self.get_url()}"'
+                specificUrl = f'{URL_BASE_API_FILMAFFINITY}/film?id={self.filmCode}'
             else:
-                specificUrl = f'{URL_BASE_API_IMDB}/film?url="{self.get_url()}"'
+                specificUrl = f'{URL_BASE_API_IMDB}/film?id={self.filmCode}'
             specificData = requests.get(specificUrl).json()
             self.title = specificData['title']
             self.genre = specificData['genre']
