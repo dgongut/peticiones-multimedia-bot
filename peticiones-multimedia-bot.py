@@ -12,7 +12,7 @@ import json
 import re
 import sys
 
-VERSION = "4.3.2"
+VERSION = "4.4.0"
 
 # Comprobación inicial de variables
 if "abc" == TELEGRAM_TOKEN:
@@ -178,7 +178,7 @@ class User:
         bot.delete_message(self.chatId, messageId)
     
 class Media:
-    def __init__(self, filmCode=None, title=None, genre=None, rating=None, year=None, webpage=None, image=None):
+    def __init__(self, filmCode=None, title=None, genre=None, rating=None, year=None, webpage=None, image=None, isSerie=False):
         self.filmCode=filmCode
         self.title=title
         self.genre=genre
@@ -186,6 +186,7 @@ class Media:
         self.year=year
         self.webpage=webpage
         self.image=image
+        self.isSerie=isSerie
 
     def get_url(self):
         if self.webpage == WEBPAGE['FILMAFFINITY']:
@@ -209,7 +210,8 @@ class Media:
         self.rating = read_cache_item(self.filmCode, "rating")
         self.year = read_cache_item(self.filmCode, "year")
         self.image = read_cache_item(self.filmCode, "image")
-        if not self.title or not self.genre or not self.rating or not self.year or not self.image:
+        self.image = read_cache_item(self.isSerie, "isSerie")
+        if not self.title or not self.genre or not self.rating or not self.year or not self.image or self.isSerie is None:
             specificUrl = None
             if self.webpage == WEBPAGE['FILMAFFINITY']:
                 specificUrl = f'{URL_BASE_API_FILMAFFINITY}/film?url="{self.get_url()}"'
@@ -221,12 +223,14 @@ class Media:
             self.rating = specificData['rating']
             self.year = specificData['year']
             self.image = specificData['image']
+            self.isSerie = specificData['isSerie']
             write_cache_item(self.filmCode, "title", self.title)
             write_cache_item(self.filmCode, "genre", self.genre)
             write_cache_item(self.filmCode, "rating", self.rating)
             write_cache_item(self.filmCode, "year", self.year)
             write_cache_item(self.filmCode, "image", self.image)
             write_cache_item(self.filmCode, "webpage", self.webpage)
+            write_cache_item(self.filmCode, "isSerie", self.isSerie)
 
 class Peticion:
     def __init__(self, id=0, user=None, media=None, status=-1):
@@ -240,7 +244,7 @@ class Peticion:
         try: 
             self.check_if_exist()
         except PeticionExiste as e:
-            if e.code != STATUS['DENEGADA']:
+            if (e.code != STATUS['DENEGADA'] and self.media.isSerie is False) or (self.media.isSerie and e.code is STATUS['PENDIENTE']):
                 raise e
             executeQuery('UPDATE peticiones SET status_id = %s, chat_id = %s WHERE id = %s', (STATUS['PENDIENTE'], self.user.chatId, e.id), do_commit=True)
             update = True
