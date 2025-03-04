@@ -12,7 +12,7 @@ import json
 import re
 import sys
 
-VERSION = "4.4.1"
+VERSION = "4.4.2"
 
 # Comprobación inicial de variables
 if "abc" == TELEGRAM_TOKEN:
@@ -210,7 +210,8 @@ class Media:
         self.rating = read_cache_item(self.filmCode, "rating")
         self.year = read_cache_item(self.filmCode, "year")
         self.image = read_cache_item(self.filmCode, "image")
-        self.image = read_cache_item(self.isSerie, "isSerie")
+        self.isSerie = read_cache_item(self.filmCode, "isSerie")
+
         if not self.title or not self.genre or not self.rating or not self.year or not self.image or self.isSerie is None:
             specificUrl = None
             if self.webpage == WEBPAGE['FILMAFFINITY']:
