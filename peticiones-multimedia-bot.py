@@ -12,7 +12,7 @@ import json
 import re
 import sys
 
-VERSION = "4.4.2"
+VERSION = "4.4.3"
 
 # Comprobación inicial de variables
 if "abc" == TELEGRAM_TOKEN:
@@ -140,25 +140,33 @@ class User:
         self.chatId, self.username, self.name, self.allowed = result[0]
 
     def update(self):
-        query = """
-            INSERT INTO usuarios (chat_id, name, username)
-            VALUES (%s, %s, %s)
-            ON DUPLICATE KEY UPDATE name = %s, username = %s
-        """
+        if self.is_admin():
+            # Insertar o actualizar con allowed=1 para admins
+            query = """
+                INSERT INTO usuarios (chat_id, name, username, allowed)
+                VALUES (%s, %s, %s, 1)
+                ON DUPLICATE KEY UPDATE name = %s, username = %s, allowed = 1
+            """
+        else:
+            # Insertar o actualizar sin tocar allowed para no-admins
+            query = """
+                INSERT INTO usuarios (chat_id, name, username)
+                VALUES (%s, %s, %s)
+                ON DUPLICATE KEY UPDATE name = %s, username = %s
+            """
+
         result = executeQuery(query, (self.chatId, self.name, self.username, self.name, self.username), do_commit=True)
+        self.load()
         if result == 1:
-            self.load()
+            
             debug(f"Usuario nuevo {self.name}. Habilitado: {self.allowed}. Es admin: {self.is_admin()}")
-            if self.is_admin() and self.allowed == 0:
-                self.unban()
-            else:
+            if not self.is_admin():
                 if not self.allowed:
-                    markup = InlineKeyboardMarkup(row_width = 1)
+                    markup = InlineKeyboardMarkup(row_width=1)
                     markup.add(InlineKeyboardButton("✅ Desbloquear usuario", callback_data=f'unban|{self.chatId}'))
                 else:
                     markup = None
                 send_message_to_admin(f"Un nuevo usuario ha utilizado el bot: {self.get_telegram_link()}", reply_markup=markup)
-        self.load()
 
     def is_admin(self):
         return self.chatId == TELEGRAM_ADMIN
