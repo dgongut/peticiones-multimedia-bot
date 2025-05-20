@@ -64,13 +64,9 @@ services:
           - SEARCH_ENGINE=filmaffinity
           - HOST_FILMAFFINITY_API=filmaffinity-api:22049
           - HOST_IMDB_API=imdb-api:22048
-          - DATABASE_USER=userdb
-          - DATABASE_PASSWORD=my_cool_secret
-          - DATABASE_NAME=exmple-database
-          - DATABASE_HOST=mariadb:3306
           #- PLEX_HOST=http://192.168.1.50:32400 #OPCIONAL
           #- PLEX_TOKEN=ilhjadflhk3414jh #OPCIONAL
-        image: dgongut/peticiones-multimedia-bot:latest
+        image: dgongut/peticiones-multimedia-bot:v5.0.0
         volumes:
           - ./config:/config
         networks:
