@@ -28,25 +28,19 @@ Como administrador:
 |TELEGRAM_ADMIN |✅| ChatId del administrador (se puede obtener hablándole al bot Rose escribiendo /id) | 
 |TELEGRAM_INTERNAL_CHAT |❌| ChatId de un grupo o canal, en el caso de que se quiera notificar de nuevas peticiones en un chat diferente al del administrador |
 |SERVER_NAME |✅| Nombre del servidor |
-|HOST_FILMAFFINITY_API |✅| *(>v2.0)* Host y puerto de la [API de consulta a Filmaffinity](https://github.com/dgongut/filmaffinity-api) |
-|HOST_IMDB_API |✅| *(>v2.0)* Host y puerto de la [API de consulta a IMDB](https://github.com/dgongut/imdb-api) |
-|DATABASE_USER |✅| *(>v3.0)* Usuario de la BBDD MariaDB |
-|DATABASE_PASSWORD |✅| *(>v3.0)* Contraseña de la BBDD MariaDB |
-|DATABASE_NAME |✅| *(>v3.0)* Nombre de la BBDD MariaDB |
-|DATABASE_HOST |✅| *(>v3.0)* Host y puerto (IP:PUERTO) de la BBDD MariaDB |
+|HOST_FILMAFFINITY_API |✅| Host y puerto de la [API de consulta a Filmaffinity](https://github.com/dgongut/filmaffinity-api) |
+|HOST_IMDB_API |✅| Host y puerto de la [API de consulta a IMDB](https://github.com/dgongut/imdb-api) |
 |SEARCH_ENGINE |❌| filmaffinity ó imdb (por defecto filmaffinity) |
 |NOMBRE_CANAL_NOVEDADES |❌| Nombre del canal donde se publiquen las novedades, de no ponerse será "Novedades en "SERVER_NAME"" |
 |RESULTADOS_POR_PAGINA |❌| Indica cuántos resultados mostrar por página en el buscador integrado de Filmaffinity (10 por defecto) |
-|PLEX_HOST |❌| *(>v4.0)* Host donde este instalado Plex, por ejemplo http://192.168.1.50:32400 |
-|PLEX_TOKEN |❌| *(>v4.0)* TOKEN de sesión de Plex, se puede obtener [así](https://support.plex.tv/articles/204059436-finding-an-authentication-token-x-plex-token/)|
+|PLEX_HOST |❌| Host donde este instalado Plex, por ejemplo http://192.168.1.50:32400 |
+|PLEX_TOKEN |❌| TOKEN de sesión de Plex, se puede obtener [así](https://support.plex.tv/articles/204059436-finding-an-authentication-token-x-plex-token/)|
 
 ### Anotaciones
-Tras la versión 3.0 se ha cambiado la manera en la que se guardan las peticiones. Ya no se guardarán en dos ficheros txt, sino que se guardarán en una BBDD MariaDB. Para facilitar la migración, [he creado un script en python](https://github.com/dgongut/migracion-peticiones-bot-v3).
-
+Tras la versión 5.0 se ha cambiado la manera en la que se guardan las peticiones. Ya no se guardarán en MariaDB debido a lentitud sino en un fichero. Para facilitar la migración, [he creado un dockerizado en python](https://github.com/dgongut/migracion-peticiones-bot-v3).
 
 ## Ejemplo docker-compose.yaml
 ```yaml
-version: '3.3'
 services:
     filmaffinity-api:
         container_name: filmaffinity-api
@@ -58,18 +52,6 @@ services:
         image: dgongut/imdb-api:latest
         networks:
           - peticiones_bot_network
-    mariadb:
-        container_name: peticiones-mariadb
-        environment:
-            - MARIADB_USER=userdb
-            - MARIADB_PASSWORD=my_cool_secret
-            - MARIADB_DATABASE=exmple-database
-            - MARIADB_ROOT_PASSWORD=my-secret-pw
-        volumes:
-          - /base/de/datos/en/el/host/:/config
-        networks:
-          - peticiones_bot_network
-        image: mariadb:latest
     peticiones-multimedia-bot:
         container_name: peticiones-multimedia-bot
         environment:
@@ -89,6 +71,8 @@ services:
           #- PLEX_HOST=http://192.168.1.50:32400 #OPCIONAL
           #- PLEX_TOKEN=ilhjadflhk3414jh #OPCIONAL
         image: dgongut/peticiones-multimedia-bot:latest
+        volumes:
+          - ./config:/config
         networks:
           - peticiones_bot_network
         tty: true

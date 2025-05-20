@@ -1,7 +1,7 @@
 import os
 from config import *
 import telebot
-import mysql.connector
+import sqlite3
 from telebot.types import InlineKeyboardMarkup
 from telebot.types import InlineKeyboardButton
 from plexapi.server import PlexServer
@@ -12,7 +12,7 @@ import json
 import re
 import sys
 
-VERSION = "4.4.3"
+VERSION = "5.0.0"
 
 # Comprobación inicial de variables
 if "abc" == TELEGRAM_TOKEN:
@@ -46,26 +46,6 @@ if "HOST:PORT" == HOST_FILMAFFINITY_API:
 
 if "HOST:PORT" == HOST_IMDB_API:
     msg = "El valor HOST_IMDB_API de buscador ha de definirse, la API puede consultarse en https://hub.docker.com/r/dgongut/imdb-api"
-    print(msg)
-    sys.exit(1)
-
-if "HOST:PORT" == DATABASE_HOST:
-    msg = "El valor DATABASE_HOST ha de definirse"
-    print(msg)
-    sys.exit(1)
-
-if "abc" == DATABASE_PASSWORD:
-    msg = "El valor DATABASE_PASSWORD ha de definirse"
-    print(msg)
-    sys.exit(1)
-
-if "abc" == DATABASE_NAME:
-    msg = "El valor DATABASE_NAME ha de definirse"
-    print(msg)
-    sys.exit(1)
-
-if "abc" == DATABASE_USER:
-    msg = "El valor DATABASE_USER ha de definirse"
     print(msg)
     sys.exit(1)
 
@@ -103,62 +83,70 @@ WEBPAGE = {
     'IMDB': 1,
 }
 
-
 class User:
     def __init__(self, chatId=None, username=None, name=None, allowed=None):
-        self.chatId=chatId
-        self.username=username
-        self.name=name
-        self.allowed=allowed
-    
+        self.chatId = chatId
+        self.username = username
+        self.name = name
+        self.allowed = allowed
+
     def ban(self):
         if not self.is_admin():
-            executeQuery('UPDATE usuarios SET allowed = false WHERE chat_id = %s', (self.chatId,), do_commit=True)
+            executeQuery('UPDATE usuarios SET allowed = 0 WHERE chat_id = ?', (self.chatId,), do_commit=True)
             self.send_message("<b>❌ Has sido deshabilitado por un administrador.</b>")
 
     def unban(self):
-        executeQuery('UPDATE usuarios SET allowed = true WHERE chat_id = %s', (self.chatId,), do_commit=True)
+        executeQuery('UPDATE usuarios SET allowed = 1 WHERE chat_id = ?', (self.chatId,), do_commit=True)
         if not self.is_admin():
             self.send_message("<b>✅ Has sido habilitado por un administrador.</b>")
 
     def load(self, chatId=None):
-        if chatId == None:
+        if chatId is None:
             chatId = self.chatId
-        result = executeQuery('SELECT chat_id, username, name, allowed FROM usuarios WHERE chat_id = %s', (chatId,))
+        result = executeQuery('SELECT chat_id, username, name, allowed FROM usuarios WHERE chat_id = ?', (chatId,))
         if not result:
             debug(f"El usuario {chatId} no se encuentra registrado entre los usuarios.")
             return
         self.chatId, self.username, self.name, self.allowed = result[0]
 
     def load_by_username(self, username=None):
-        if username == None:
+        if username is None:
             username = self.username
-        result = executeQuery('SELECT chat_id, username, name, allowed FROM usuarios WHERE username = %s', (username,))
+        result = executeQuery('SELECT chat_id, username, name, allowed FROM usuarios WHERE username = ?', (username,))
         if not result:
             debug(f"El usuario {username} no se encuentra registrado entre los usuarios.")
             return
         self.chatId, self.username, self.name, self.allowed = result[0]
 
     def update(self):
+        # Primero verificamos si el usuario existe
+        existing = executeQuery('SELECT 1 FROM usuarios WHERE chat_id = ?', (self.chatId,))
+        is_new_user = len(existing) == 0
+
         if self.is_admin():
-            # Insertar o actualizar con allowed=1 para admins
             query = """
                 INSERT INTO usuarios (chat_id, name, username, allowed)
-                VALUES (%s, %s, %s, 1)
-                ON DUPLICATE KEY UPDATE name = %s, username = %s, allowed = 1
+                VALUES (?, ?, ?, 1)
+                ON CONFLICT(chat_id) DO UPDATE SET
+                    name = excluded.name,
+                    username = excluded.username,
+                    allowed = 1
             """
+            values = (self.chatId, self.name, self.username)
         else:
-            # Insertar o actualizar sin tocar allowed para no-admins
             query = """
                 INSERT INTO usuarios (chat_id, name, username)
-                VALUES (%s, %s, %s)
-                ON DUPLICATE KEY UPDATE name = %s, username = %s
+                VALUES (?, ?, ?)
+                ON CONFLICT(chat_id) DO UPDATE SET
+                    name = excluded.name,
+                    username = excluded.username
             """
+            values = (self.chatId, self.name, self.username)
 
-        result = executeQuery(query, (self.chatId, self.name, self.username, self.name, self.username), do_commit=True)
+        executeQuery(query, values, do_commit=True)
         self.load()
-        if result == 1:
-            
+
+        if is_new_user:
             debug(f"Usuario nuevo {self.name}. Habilitado: {self.allowed}. Es admin: {self.is_admin()}")
             if not self.is_admin():
                 if not self.allowed:
@@ -243,59 +231,85 @@ class Media:
 
 class Peticion:
     def __init__(self, id=0, user=None, media=None, status=-1):
-        self.id=id
-        self.user=user
-        self.media=media
-        self.status=status
+        self.id = id
+        self.user = user
+        self.media = media
+        self.status = status
 
     def add(self):
         update = False
-        try: 
+        try:
             self.check_if_exist()
         except PeticionExiste as e:
-            if (e.code != STATUS['DENEGADA'] and self.media.isSerie is False) or (self.media.isSerie and e.code is STATUS['PENDIENTE']):
+            if (e.code != STATUS['DENEGADA'] and not self.media.isSerie) or (self.media.isSerie and e.code == STATUS['PENDIENTE']):
                 raise e
-            executeQuery('UPDATE peticiones SET status_id = %s, chat_id = %s WHERE id = %s', (STATUS['PENDIENTE'], self.user.chatId, e.id), do_commit=True)
+            executeQuery(
+                'UPDATE peticiones SET status_id = ?, chat_id = ? WHERE id = ?',
+                (STATUS['PENDIENTE'], self.user.chatId, e.id),
+                do_commit=True
+            )
             update = True
+
         if not update:
-            executeQuery('INSERT INTO peticiones (chat_id, film_code, webpage_id, status_id) VALUES (%s, %s, %s, %s)', (self.user.chatId, self.media.filmCode, self.media.webpage, STATUS['PENDIENTE']), do_commit=True)
+            executeQuery(
+                'INSERT INTO peticiones (chat_id, film_code, webpage_id, status_id) VALUES (?, ?, ?, ?)',
+                (self.user.chatId, self.media.filmCode, self.media.webpage, STATUS['PENDIENTE']),
+                do_commit=True
+            )
 
     def add_with_messages(self):
         try:
             self.add()
-            self.user.send_message(f'{self.media.get_image_previsualize()}{self.user.name}, has solicitado con éxito:\n{self.media.get_telegram_link()}\nNotificado al administrador ✅')
+            self.user.send_message(
+                f'{self.media.get_image_previsualize()}{self.user.name}, has solicitado con éxito:\n{self.media.get_telegram_link()}\nNotificado al administrador ✅'
+            )
+
             url = self.media.get_url()
-            markup = InlineKeyboardMarkup(row_width = 2)
-            botones = []
-            botones.append(InlineKeyboardButton("✅", callback_data=url))
-            botones.append(InlineKeyboardButton("🗑️", callback_data=f'D|{url}'))
+            markup = InlineKeyboardMarkup(row_width=2)
+            botones = [
+                InlineKeyboardButton("✅", callback_data=url),
+                InlineKeyboardButton("🗑️", callback_data=f'D|{url}')
+            ]
             markup.add(*botones)
-            x = send_message_to_admin(f'{self.media.get_image_previsualize()}Nueva petición de {self.user.get_telegram_link()}:\n{self.media.get_telegram_link()}', reply_markup=markup)
+
+            x = send_message_to_admin(
+                f'{self.media.get_image_previsualize()}Nueva petición de {self.user.get_telegram_link()}:\n{self.media.get_telegram_link()}',
+                reply_markup=markup
+            )
             write_cache_item(self.media.filmCode, "notification", x.message_id)
+
         except PeticionExiste as e:
-            self.user.send_message(f'❌ {self.media.get_image_previsualize()}{self.user.name}, la petición: {self.media.get_telegram_link()} ya se encuentra añadida y está en estado {e.status}.')
+            self.user.send_message(
+                f'❌ {self.media.get_image_previsualize()}{self.user.name}, la petición: {self.media.get_telegram_link()} ya se encuentra añadida y está en estado {e.status}.'
+            )
 
     def completar(self):
-        executeQuery('UPDATE peticiones SET status_id = %s WHERE id = %s', (STATUS['COMPLETADA'], self.id), do_commit=True)
+        executeQuery(
+            'UPDATE peticiones SET status_id = ? WHERE id = ?',
+            (STATUS['COMPLETADA'], self.id),
+            do_commit=True
+        )
 
     def borrar(self):
-        executeQuery('UPDATE peticiones SET status_id = %s WHERE id = %s', (STATUS['DENEGADA'], self.id), do_commit=True)
+        executeQuery(
+            'UPDATE peticiones SET status_id = ? WHERE id = ?',
+            (STATUS['DENEGADA'], self.id),
+            do_commit=True
+        )
 
     def load_from_filmCode(self, filmCode):
         query = """
-                    SELECT p.id, p.film_code, p.webpage_id, p.status_id, u.name, u.username, u.chat_id, u.allowed
-                    FROM peticiones p
-                    JOIN usuarios u ON p.chat_id = u.chat_id
-                    WHERE p.film_code = %s;
-            """
-        if isinstance(filmCode, str):
-            filmCode = (filmCode,)
-        resultado = executeQuery(query, filmCode)[0]
-        user = User(chatId=resultado[6], username=resultado[5], name=resultado[4], allowed=resultado[7])
-        media = Media(filmCode=resultado[1], webpage=resultado[2])
-        media.load()
-        self.user = user
-        self.media = media
+            SELECT p.id, p.film_code, p.webpage_id, p.status_id,
+                   u.name, u.username, u.chat_id, u.allowed
+            FROM peticiones p
+            JOIN usuarios u ON p.chat_id = u.chat_id
+            WHERE p.film_code = ?;
+        """
+        resultado = executeQuery(query, (filmCode,))[0]
+
+        self.user = User(chatId=resultado[6], username=resultado[5], name=resultado[4], allowed=resultado[7])
+        self.media = Media(filmCode=resultado[1], webpage=resultado[2])
+        self.media.load()
         self.id = resultado[0]
         self.status = resultado[3]
 
@@ -306,34 +320,42 @@ class Peticion:
             textConfirmation = f"🔎 Se ha encontrado contenido en <b>{SERVER_NAME}</b> que podría coincidir con tu solicitud.\n\n"
             textConfirmation += f"Has querido solicitar: {self.media.get_telegram_link()}\n\n"
             textConfirmation += f"En <b>{SERVER_NAME}</b> se ha encontrado:\n\n"
+
             contador = 0
             for item in search_results:
                 if item.type in ("movie", "show"):
                     textConfirmation += f" · {item.title} ({item.year})\n"
                     contador += 1
+
             if contador == 0:
                 self.add_with_messages()
                 return
+
             textConfirmation += "\nSi lo que quieres pedir no se encuentra entre los resultados, puedes confirmar la petición. En caso contrario puedes cancelarla."
-            markup = InlineKeyboardMarkup(row_width = 2)
-            botones = []
-            botones.append(InlineKeyboardButton("✅ Pedir", callback_data=f'C|{self.media.get_url()}'))
-            botones.append(InlineKeyboardButton("❌ Cancelar", callback_data="cerrar"))
+            markup = InlineKeyboardMarkup(row_width=2)
+            botones = [
+                InlineKeyboardButton("✅ Pedir", callback_data=f'C|{self.media.get_url()}'),
+                InlineKeyboardButton("❌ Cancelar", callback_data="cerrar")
+            ]
             markup.add(*botones)
             self.user.send_message(textConfirmation, reply_markup=markup, disable_web_page_preview=True)
         else:
             self.add_with_messages()
-    
+
     def check_if_exist(self):
         query = """
-                    SELECT id, status_id
-                    FROM peticiones
-                    WHERE film_code = %s;
-            """
+            SELECT id, status_id
+            FROM peticiones
+            WHERE film_code = ?;
+        """
         resultados = executeQuery(query, (self.media.filmCode,))
         for resultado in resultados:
             id, status = resultado
-            raise PeticionExiste(code=status, status=next((estado.lower() for estado, numero in STATUS.items() if numero == status), None), id=id)
+            raise PeticionExiste(
+                code=status,
+                status=next((estado.lower() for estado, numero in STATUS.items() if numero == status), None),
+                id=id
+            )
 
 # =======================================================================
 # =======================================================================
@@ -849,14 +871,14 @@ def imdb_search(searchText):
 
 def get_all_pending_peticiones():
     query = """
-                    SELECT film_code
-                    FROM peticiones
-                    WHERE status_id = %s;
-            """
+        SELECT film_code
+        FROM peticiones
+        WHERE status_id = ?;
+    """
     peticiones = []
     resultados = executeQuery(query, (STATUS['PENDIENTE'],))
 
-    for filmCode in resultados:
+    for (filmCode,) in resultados:
         peticion = Peticion()
         peticion.load_from_filmCode(filmCode)
         peticiones.append(peticion)
@@ -865,15 +887,14 @@ def get_all_pending_peticiones():
 
 def get_all_pending_peticiones_from_user(user):
     query = """
-                    SELECT film_code
-                    FROM peticiones
-                    WHERE status_id = %s AND chat_id = %s;
-            """
-
+        SELECT film_code
+        FROM peticiones
+        WHERE status_id = ? AND chat_id = ?;
+    """
     resultados = executeQuery(query, (STATUS['PENDIENTE'], user.chatId))
     peticiones = []
 
-    for filmCode in resultados:
+    for (filmCode,) in resultados:
         peticion = Peticion()
         peticion.load_from_filmCode(filmCode)
         peticiones.append(peticion)
@@ -905,33 +926,40 @@ def get_all_active_users():
     return users
 
 def write_cache_item(filmCode, property, valor):
+    clave = f'{filmCode}_{property}'
     query = """
-        INSERT INTO cache (clave, valor)
-        VALUES (%s, %s)
-        ON DUPLICATE KEY UPDATE valor = %s
+        INSERT OR REPLACE INTO cache (clave, valor)
+        VALUES (?, ?)
     """
-    executeQuery(query, (f'{filmCode}_{property}', valor, valor), do_commit=True)
+    executeQuery(query, (clave, valor), do_commit=True)
 
 def read_cache_item(filmCode, property):
+    clave = f'{filmCode}_{property}'
     try:
-        return executeQuery('SELECT valor FROM cache WHERE clave = %s', (f'{filmCode}_{property}',))[0][0]
-    except:
+        return executeQuery('SELECT valor FROM cache WHERE clave = ?', (clave,))[0][0]
+    except IndexError:
         return None
 
 def set_user_search(chatId, messageId, datos):
+    clave = f'{chatId}_{messageId}'
+    valor_json = json.dumps(datos)
     query = """
-        INSERT INTO cache (clave, valor)
-        VALUES (%s, %s)
-        ON DUPLICATE KEY UPDATE valor = %s
+        INSERT OR REPLACE INTO cache (clave, valor)
+        VALUES (?, ?)
     """
-    executeQuery(query, (f'{chatId}_{messageId}', json.dumps(datos), json.dumps(datos)), do_commit=True)
+    executeQuery(query, (clave, valor_json), do_commit=True)
 
 def get_user_search(chatId, messageId):
-    result = executeQuery('SELECT valor FROM cache WHERE clave = %s', (f'{chatId}_{messageId}',))[0][0]
-    return json.loads(result)
+    clave = f'{chatId}_{messageId}'
+    try:
+        result = executeQuery('SELECT valor FROM cache WHERE clave = ?', (clave,))[0][0]
+        return json.loads(result)
+    except IndexError:
+        return None
 
 def delete_user_search(chatId, messageId):
-    executeQuery('DELETE FROM cache WHERE clave = %s', (f'{chatId}_{messageId}',), do_commit=True)
+    clave = f'{chatId}_{messageId}'
+    executeQuery('DELETE FROM cache WHERE clave = ?', (clave,), do_commit=True)
 
 def debug(message):
     print(f'{datetime.now().strftime("%Y-%m-%d %H:%M:%S")} - DEBUG: {message}')
@@ -989,98 +1017,99 @@ class PeticionExiste(Exception):
 # =================
 # =================
 
+def table_exists(table_name):
+    result = executeQuery(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
+        (table_name,)
+    )
+    return bool(result)
+
 def create_tables_default():
     debug("Creando tablas si no existen")
 
-    # Verifica si las tablas ya existen
-    usuarios_exists = executeQuery("SHOW TABLES LIKE 'usuarios'")
-    peticiones_exists = executeQuery("SHOW TABLES LIKE 'peticiones'")
-    cache_exists = executeQuery("SHOW TABLES LIKE 'cache'")
-    status_exist = executeQuery("SHOW TABLES LIKE 'status'")
-    webpage_exist = executeQuery("SHOW TABLES LIKE 'webpage'")
-    
-    # Si las tablas no existen, créalas
+    usuarios_exists = table_exists("usuarios")
+    peticiones_exists = table_exists("peticiones")
+    cache_exists = table_exists("cache")
+    status_exist = table_exists("status")
+    webpage_exist = table_exists("webpage")
+
     if not usuarios_exists:
-        # Crear tabla de usuarios
         executeQuery("""
             CREATE TABLE usuarios (
-                chat_id BIGINT PRIMARY KEY,
-                name VARCHAR(255) NOT NULL,
-                username VARCHAR(255),
-                allowed BOOLEAN DEFAULT FALSE
+                chat_id INTEGER PRIMARY KEY,
+                name TEXT NOT NULL,
+                username TEXT,
+                allowed INTEGER DEFAULT 0
+            )
+        """, do_commit=True)
+        executeQuery("CREATE INDEX IF NOT EXISTS idx_usuarios_username ON usuarios(username);", do_commit=True)
+
+    if not status_exist:
+        executeQuery("""
+            CREATE TABLE status (
+                id INTEGER PRIMARY KEY,
+                description TEXT NOT NULL
             )
         """, do_commit=True)
 
-    if not status_exist:
-        # Crear tabla de status
-        executeQuery("""
-            CREATE TABLE status (
-                id INT PRIMARY KEY,
-                description VARCHAR(255) NOT NULL
-            )
-        """, do_commit=True)
-        # Insertar valores por defecto solo si no existen
         executeQuery('INSERT INTO status (id, description) SELECT 0, "pendiente" WHERE NOT EXISTS (SELECT 1 FROM status WHERE id = 0)', do_commit=True)
         executeQuery('INSERT INTO status (id, description) SELECT 1, "completada" WHERE NOT EXISTS (SELECT 1 FROM status WHERE id = 1)', do_commit=True)
         executeQuery('INSERT INTO status (id, description) SELECT 2, "denegada" WHERE NOT EXISTS (SELECT 1 FROM status WHERE id = 2)', do_commit=True)
 
     if not webpage_exist:
-        # Crear tabla de status
         executeQuery("""
             CREATE TABLE webpage (
-                id INT PRIMARY KEY,
-                description VARCHAR(50) NOT NULL
+                id INTEGER PRIMARY KEY,
+                description TEXT NOT NULL
             )
         """, do_commit=True)
-        # Insertar valores por defecto solo si no existen
+
         executeQuery('INSERT INTO webpage (id, description) SELECT 0, "filmaffinity" WHERE NOT EXISTS (SELECT 1 FROM webpage WHERE id = 0)', do_commit=True)
         executeQuery('INSERT INTO webpage (id, description) SELECT 1, "imdb" WHERE NOT EXISTS (SELECT 1 FROM webpage WHERE id = 1)', do_commit=True)
 
     if not cache_exists:
-        # Crear tabla de cache
         executeQuery("""
             CREATE TABLE cache (
-                clave VARCHAR(255) PRIMARY KEY,
+                clave TEXT PRIMARY KEY,
                 valor TEXT
             )
         """, do_commit=True)
 
     if not peticiones_exists:
-        # Crear tabla de peticiones
         executeQuery("""
             CREATE TABLE peticiones (
-                id INT AUTO_INCREMENT PRIMARY KEY,
-                chat_id BIGINT NOT NULL,
-                film_code VARCHAR(255) NOT NULL,
-                webpage_id INT NOT NULL,
-                status_id INT NOT NULL,
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                chat_id INTEGER NOT NULL,
+                film_code TEXT NOT NULL,
+                webpage_id INTEGER NOT NULL,
+                status_id INTEGER NOT NULL,
                 FOREIGN KEY (chat_id) REFERENCES usuarios(chat_id),
                 FOREIGN KEY (status_id) REFERENCES status(id),
                 FOREIGN KEY (webpage_id) REFERENCES webpage(id)
             )
         """, do_commit=True)
+        executeQuery("CREATE INDEX IF NOT EXISTS idx_peticiones_film_code ON peticiones(film_code);", do_commit=True)
+
     debug("Tablas correctas")
 
+conn = None
+
 def conectar():
-    HOST, PORT = DATABASE_HOST.split(":")
-    return mysql.connector.connect(
-        host=HOST,
-        port=PORT,
-        user=DATABASE_USER,
-        password=DATABASE_PASSWORD,
-        database=DATABASE_NAME
-    )
+    global conn
+    if conn is None:
+        conn = sqlite3.connect(FICHERO_SQLITE, check_same_thread=False)
+        conn.execute("PRAGMA foreign_keys = ON")
+        conn.execute("PRAGMA journal_mode = WAL")
+    return conn
 
 def executeQuery(query, values=None, do_commit=False, debugging=False):
-    mydb = conectar()
-    cursor = mydb.cursor()
+    conn = conectar()
+    cursor = conn.cursor()
 
     if debugging:
-        if values is not None:
-            debug(f'SQL Query: {query}')
+        debug(f'SQL Query: {query}')
+        if values:
             debug(f'SQL Values: {values}')
-        else:
-            debug(f'SQL Query: {query}')
 
     try:
         if values is not None:
@@ -1088,29 +1117,22 @@ def executeQuery(query, values=None, do_commit=False, debugging=False):
         else:
             cursor.execute(query)
 
-        if query.strip().lower().startswith("select") or query.strip().lower().startswith("show"):
-            # Devuelve los resultados solo si es una consulta SELECT o SHOW
+        if query.strip().lower().startswith(("select", "pragma")):
             results = cursor.fetchall()
-            if debugging:
-                debug(results)
-        elif query.strip().lower().startswith("insert") or query.strip().lower().startswith("update"):
-            # Devuelve el numero de resultados insertados/actualizados
+        elif query.strip().lower().startswith(("insert", "update", "delete")):
             results = cursor.rowcount
-            if debugging:
-                debug(results)
         else:
             results = None
+
+        if do_commit:
+            conn.commit()
     except Exception as e:
         print(f"Error executing query: {e}")
         raise
     finally:
-        if do_commit:
-            mydb.commit()
         cursor.close()
-        mydb.close()
 
     return results
-
 
 # ===============================
 # ===============================
@@ -1127,15 +1149,14 @@ def executeQuery(query, values=None, do_commit=False, debugging=False):
 # MAIN
 if __name__ == '__main__':
     debug(f'Iniciando Bot de peticiones en {SERVER_NAME}')
-    time.sleep(10) # Esperamos a la BBDD por si se está arrancando
     create_tables_default()
     bot.set_my_commands([ # Comandos a mostrar en el menú de Telegram
         telebot.types.BotCommand("/start", "Da la bienvenida"),
         telebot.types.BotCommand("/busca", f'Busca en {SEARCH_ENGINE}'),
-        telebot.types.BotCommand("/list",  "Utilidad para completar o descartar peticiones"),
-        telebot.types.BotCommand("/ban",   "<ADMIN> Utilidad para deshabilitar usuarios"),
+        telebot.types.BotCommand("/list", "Utilidad para completar o descartar peticiones"),
+        telebot.types.BotCommand("/ban", "<ADMIN> Utilidad para deshabilitar usuarios"),
         telebot.types.BotCommand("/unban", "<ADMIN> Utilidad para habilitar usuarios"),
-        telebot.types.BotCommand("/sendtoall",  "<ADMIN> Utilidad para escribir a todos los usuarios"),
+        telebot.types.BotCommand("/sendtoall", "<ADMIN> Utilidad para escribir a todos los usuarios"),
         telebot.types.BotCommand("/sendtouser", "<ADMIN> Utilidad para escribir a un usuario"),
         telebot.types.BotCommand("/version", "Consulta la versión actual del programa")
         ])
