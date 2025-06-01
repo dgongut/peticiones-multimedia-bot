@@ -12,7 +12,7 @@ import json
 import re
 import sys
 
-VERSION = "5.0.0"
+VERSION = "5.0.1"
 
 # Comprobación inicial de variables
 if "abc" == TELEGRAM_TOKEN:
@@ -215,12 +215,12 @@ class Media:
             else:
                 specificUrl = f'{URL_BASE_API_IMDB}/film?id={self.filmCode}'
             specificData = requests.get(specificUrl).json()
-            self.title = specificData['title']
-            self.genre = specificData['genre']
-            self.rating = specificData['rating']
-            self.year = specificData['year']
-            self.image = specificData['image']
-            self.isSerie = specificData['isSerie']
+            self.title = specificData.get('title')
+            self.genre = specificData.get('genre')
+            self.rating = specificData.get('rating')
+            self.year = specificData.get('year')
+            self.image = specificData.get('image')
+            self.isSerie = bool(specificData.get('isSerie', False))
             write_cache_item(self.filmCode, "title", self.title)
             write_cache_item(self.filmCode, "genre", self.genre)
             write_cache_item(self.filmCode, "rating", self.rating)
