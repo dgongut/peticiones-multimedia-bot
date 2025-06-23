@@ -12,7 +12,7 @@ import json
 import re
 import sys
 
-VERSION = "5.0.1"
+VERSION = "5.0.2"
 
 # Comprobación inicial de variables
 if "abc" == TELEGRAM_TOKEN:
@@ -174,7 +174,7 @@ class User:
         bot.delete_message(self.chatId, messageId)
     
 class Media:
-    def __init__(self, filmCode=None, title=None, genre=None, rating=None, year=None, webpage=None, image=None, isSerie=False):
+    def __init__(self, filmCode=None, title=None, genre=None, rating=None, year=None, webpage=WEBPAGE['FILMAFFINITY'], image=None, isSerie=False):
         self.filmCode=filmCode
         self.title=title
         self.genre=genre
@@ -185,7 +185,7 @@ class Media:
         self.isSerie=isSerie
 
     def get_url(self):
-        if self.webpage == WEBPAGE['FILMAFFINITY']:
+        if int(self.webpage) == WEBPAGE['FILMAFFINITY']:
             return f'https://www.filmaffinity.com/es/film{self.filmCode}.html'
         else:
             return f'https://www.imdb.com/title/tt{self.filmCode}/'
@@ -210,7 +210,7 @@ class Media:
 
         if not self.title or not self.genre or not self.rating or not self.year or not self.image or self.isSerie is None:
             specificUrl = None
-            if self.webpage == WEBPAGE['FILMAFFINITY']:
+            if int(self.webpage) == WEBPAGE['FILMAFFINITY']:
                 specificUrl = f'{URL_BASE_API_FILMAFFINITY}/film?id={self.filmCode}'
             else:
                 specificUrl = f'{URL_BASE_API_IMDB}/film?id={self.filmCode}'
@@ -241,7 +241,7 @@ class Peticion:
         try:
             self.check_if_exist()
         except PeticionExiste as e:
-            if (e.code != STATUS['DENEGADA'] and not self.media.isSerie) or (self.media.isSerie and e.code == STATUS['PENDIENTE']):
+            if (int(e.code) != STATUS['DENEGADA'] and not self.media.isSerie) or (self.media.isSerie and int(e.code) == STATUS['PENDIENTE']):
                 raise e
             executeQuery(
                 'UPDATE peticiones SET status_id = ?, chat_id = ? WHERE id = ?',
