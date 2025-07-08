@@ -1,3 +1,6 @@
+> [!CAUTION]
+> Este proyecto se encuentra descontinuado
+
 # peticiones-multimedia-bot
 
 Lleva el control de las peticiones multimedia de tu servidor desde un único lugar.
